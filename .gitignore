@@ -1,6 +1,5 @@
 logs/
 lightning_logs/
-models/
 output/
 real_world_data/
 real_world_output/

@@ -228,8 +228,6 @@ class VisionTransformer(nn.Module):
             nn.LeakyReLU(True),
             nn.Conv2d(16, 3, kernel_size=1)
         )
-        
-            
         # Multi-head output layers
 
     def forward(self, x):
@@ -244,9 +242,6 @@ class VisionTransformer(nn.Module):
         out5 = self.decoder5(x)
         
         return out1, out2, out3, out4, out5
-
-
-
 
 if __name__ == "__main__":
     # Instantiate the model
