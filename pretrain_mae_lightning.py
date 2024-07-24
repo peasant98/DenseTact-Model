@@ -179,6 +179,7 @@ if __name__ == '__main__':
         model_name='vit', 
         num_epochs=opt.epochs,
         total_steps=opt.epochs * len(train_dataset),
+        mask_ratio=opt.mask_ratio,
         learning_rate=1e-3
     )
 
