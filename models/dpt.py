@@ -38,9 +38,9 @@ class DPTHead(nn.Module):
     def __init__(
         self, 
         in_channels, 
-        output_dim=15,
         features=256, 
         use_bn=False, 
+        output_dim=15,
         out_channels=[256, 512, 1024, 1024], 
         use_clstoken=False
     ):
@@ -144,22 +144,26 @@ class DPTHead(nn.Module):
         path_1 = self.scratch.refinenet1(path_2, layer_1_rn)
         
         out = self.scratch.output_conv1(path_1)
-        out = F.interpolate(out, (int(patch_h * 14), int(patch_w * 14)), mode="bilinear", align_corners=True)
+        out = F.interpolate(out, (int(patch_h * 16), int(patch_w * 16)), mode="bilinear", align_corners=True)
         out = self.scratch.output_conv2(out)
         
         return out
 
 
-class DepthAnythingV2(nn.Module):
+class DPTV2Net(nn.Module):
     def __init__(
         self, 
+        img_size=256,
+        patch_size=16,
+        in_chans=3,
         encoder='vitl', 
         features=256, 
         out_channels=[256, 512, 1024, 1024], 
+        out_dims=15,
         use_bn=False, 
         use_clstoken=False
     ):
-        super(DepthAnythingV2, self).__init__()
+        super(DPTV2Net, self).__init__()
         
         self.intermediate_layer_idx = {
             'vits': [2, 5, 8, 11],
@@ -169,9 +173,9 @@ class DepthAnythingV2(nn.Module):
         }
         
         self.encoder = encoder
-        self.pretrained = DINOv2(model_name=encoder)
-        
-        self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, out_channels=out_channels, use_clstoken=use_clstoken)
+        self.pretrained = DINOv2(model_name=encoder, img_size=img_size, in_chans=in_chans, patch_size=patch_size)
+        self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, output_dim=out_dims, 
+                                out_channels=out_channels, use_clstoken=use_clstoken)
     
     def forward(self, x):
         patch_h, patch_w = x.shape[-2] // 16, x.shape[-1] // 16

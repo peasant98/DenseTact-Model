@@ -9,3 +9,8 @@ runs/
 __pycache__/
 viz/
 viz_lightning/
+
+output
+test_data
+
+*.ipynb

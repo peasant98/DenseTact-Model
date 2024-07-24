@@ -395,7 +395,7 @@ def vit_giant2(patch_size=16, num_register_tokens=0, **kwargs):
     return model
 
 
-def DINOv2(model_name):
+def DINOv2(model_name, **kwargs):
     model_zoo = {
         "vits": vit_small, 
         "vitb": vit_base, 
@@ -404,12 +404,11 @@ def DINOv2(model_name):
     }
     
     return model_zoo[model_name](
-        img_size=518,
-        patch_size=14,
         init_values=1.0,
         ffn_layer="mlp" if model_name != "vitg" else "swiglufused",
         block_chunks=0,
         num_register_tokens=0,
         interpolate_antialias=False,
-        interpolate_offset=0.1
+        interpolate_offset=0.1,
+        **kwargs
     )

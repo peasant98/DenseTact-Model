@@ -19,6 +19,7 @@ from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 
 from models.dt_vit import dt_vit_large_patch16 
+from models.dpt import DPTV2Net
 from util.loss_util import ssim
 
 class LightningDTModel(L.LightningModule):
@@ -31,7 +32,10 @@ class LightningDTModel(L.LightningModule):
         """ MAE Model for training on the DT dataset """
         super(LightningDTModel, self).__init__()
         
-        self.model = dt_vit_large_patch16(img_size=256, in_chans=7, out_chans=15)
+        if model_name == "ViT":
+            self.model = dt_vit_large_patch16(img_size=256, in_chans=7, out_chans=15)
+        elif model_name == "DPT":
+            self.model = DPTV2Net(in_chans=7, img_size=256)
 
         self.criterion = nn.L1Loss()
         # self.criterion = nn.MSELoss()
@@ -137,7 +141,7 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=12)
 
     calibration_model = LightningDTModel(
-        model_name='vit', 
+        model_name='DPT', 
         num_epochs=opt.epochs,
         total_steps=opt.epochs * len(train_dataset),
         learning_rate=1e-3
@@ -159,9 +163,10 @@ if __name__ == '__main__':
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
     # add callbacks
+    strategy = "ddp" if opt.gpus > 1 else "auto"
     callbacks = [checkpoint_callback, lr_monitor]
     trainer = L.Trainer(max_epochs=opt.epochs, callbacks=callbacks, logger=logger,
-                        accelerator="gpu", devices=opt.gpus, strategy="ddp")
+                        accelerator="gpu", devices=opt.gpus, strategy=strategy)
     
     trainer.fit(model=calibration_model, train_dataloaders=dataloader, 
                  ckpt_path=opt.ckpt_path, val_dataloaders=test_dataloader)
