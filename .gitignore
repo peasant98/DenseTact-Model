@@ -1,6 +1,7 @@
 logs/
 lightning_logs/
 output/
+exp/
 real_world_data/
 real_world_output/
 test_data/
