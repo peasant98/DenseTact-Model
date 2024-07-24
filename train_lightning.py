@@ -106,12 +106,16 @@ class LightningDTModel(L.LightningModule):
         loss = self.criterion(outputs, y)
         mse = self.mse(outputs, y)
         l1 = self.l1_loss(outputs, y)
-        
-        # check loss where y values
-        
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('val_mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('val_l1', l1, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        
+        # get error between non zero values in y and corresponding values in output
+        y_non_zero = y[y != 0]
+        output_non_zero = outputs[y != 0]
+        return_loss = self.mse(output_non_zero, y_non_zero)
+        self.log('val_mse_non_zero_loss', return_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        
         return loss
         
     def training_step(self, batch, batch_idx):
@@ -139,8 +143,13 @@ class LightningDTModel(L.LightningModule):
         mse = self.mse(outputs, y)
         l1 = self.l1_loss(outputs, y)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log('mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        self.log('l1', l1, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('train_mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('train_l1', l1, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        y_non_zero = y[y != 0]
+        output_non_zero = outputs[y != 0]
+        return_loss = self.mse(output_non_zero, y_non_zero)
+        self.log('train_mse_non_zero_loss', return_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        
         
         # log sample input and output at each epoch
         if batch_idx == 0:
