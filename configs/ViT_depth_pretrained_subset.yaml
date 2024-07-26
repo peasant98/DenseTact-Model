@@ -1,8 +1,4 @@
 dataset_ratio: 0.4
-epochs: 100
-
-# training parameters
-learning_rate: 0.001
 finetune_ratio: 0.8
 
 model:

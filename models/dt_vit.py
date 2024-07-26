@@ -164,6 +164,47 @@ class DTViT(nn.Module):
         pred = self.unpatchify(pred)
         # loss = self.forward_loss(imgs, pred)
         return pred
+    
+    def load_from_pretrained_model(self, model_path:str):
+        """
+        Load weights from a pre-trained model
+        """
+        model_ckpt = torch.load(model_path)
+
+        print("Pretrained model epochs: ", model_ckpt["epoch"])
+
+        # load encoder weights
+        patch_embed_dict = {'.'.join(k.split('.')[2:]):v for k, v in model_ckpt["state_dict"].items() if 'patch_embed' in k}
+        self.patch_embed.load_state_dict(patch_embed_dict)
+        
+        self.cls_token.data.copy_(model_ckpt["state_dict"]['model.cls_token'])
+        self.pos_embed.data.copy_(model_ckpt["state_dict"]["model.pos_embed"])
+
+        for i, blk in enumerate(self.blocks):
+            block_dict = {'.'.join(k.split('.')[3:]):v for k, v in model_ckpt["state_dict"].items() if 'model.blocks' in k}
+            blk.load_state_dict(block_dict)
+        
+    def freeze_encoder(self):
+        """ Freeze the encoder weights """
+        for param in self.patch_embed.parameters():
+            param.requires_grad = False
+        
+        self.cls_token.requires_grad = False
+
+        for blk in self.blocks:
+            for param in blk.parameters():
+                param.requires_grad = False
+    
+    def unfreeze_encoder(self):
+        """ Unfreeze the encoder """
+        for param in self.patch_embed.parameters():
+            param.requires_grad = True
+        
+        self.cls_token.requires_grad = True
+
+        for blk in self.blocks:
+            for param in blk.parameters():
+                param.requires_grad = True
 
 
 def dt_vit_base_patch16_dec512d8b(**kwargs):

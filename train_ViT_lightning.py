@@ -23,8 +23,7 @@ from lightning.pytorch.callbacks import LearningRateMonitor
 
 from configs import get_cfg_defaults
 
-from models.dt_vit import dt_vit_base_patch16 
-from models.dpt import DPTV2Net
+from models import build_model
 from util.loss_util import ssim
 
 class LightningDTModel(L.LightningModule):
@@ -32,16 +31,8 @@ class LightningDTModel(L.LightningModule):
         """ MAE Model for training on the DT dataset """
         super(LightningDTModel, self).__init__()
         self.cfg = cfg
-        
-        # build model
-        if cfg.model.name == "ViT":
-            self.model = dt_vit_base_patch16(img_size=cfg.model.img_size, 
-                            in_chans=cfg.model.in_chans, out_chans=cfg.model.out_chans)
-        elif cfg.model.name == "DPT":
-            self.model = DPTV2Net(img_size=cfg.model.img_size, 
-                            in_chans=cfg.model.in_chans, out_dims=cfg.model.out_chans)
-        else:
-            raise NotImplementedError("Model not implemented {}".format(cfg.model.name))
+
+        self.model = build_model(cfg)
 
         # build loss
         if cfg.model.loss == "L1":
@@ -60,12 +51,12 @@ class LightningDTModel(L.LightningModule):
 
     def on_train_start(self):
         # only load pre-trained model at the first epoch
-        if self.cfg.model.pretrained_model is not None and self.trainer.current_epoch == 0:
+        if len(self.cfg.model.pretrained_model) > 0 and self.trainer.current_epoch == 0:
             print("Load pretrained model")
             self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)
 
     def on_train_epoch_start(self):
-        if self.cfg.model.pretrained_model is not None:
+        if len(self.cfg.model.pretrained_model) > 0 :
             print("Freezing encoder when loading from pretrained model")
             if self.trainer.current_epoch < self.cfg.finetune_ratio * self.num_epochs:
                 self.model.freeze_encoder()
@@ -127,11 +118,13 @@ class LightningDTModel(L.LightningModule):
         label_flatten = label.flatten()
 
         num_pixels = label_flatten.shape[0]
-        threshold_ratio = [k * 0.1 for k in range(1, 11)]
+        num_bins = self.cfg.metric.num_bins
+        interval = self.cfg.metric.TF_rel_error_rate / num_bins
+        threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
 
         # Here, negative samples are the pixels with value than 1e-6
         # positive samples are the pixels with value greater than 1e-6
-        eps = 1e-6
+        eps = self.cfg.metric.PN_thresh
 
         # compute the negative pixels
         Neg_mask = torch.abs(label_flatten) < eps
@@ -154,7 +147,7 @@ class LightningDTModel(L.LightningModule):
             for ratio in threshold_ratio:
                 error_curve.append(torch.sum(rel_error < ratio).item())
 
-            error_curve.append(torch.sum(rel_error > 1).item())
+            error_curve.append(torch.sum(rel_error > self.cfg.metric.TF_rel_error_rate).item())
             error_curve = np.array(error_curve)
         
         return dict(NegativeNum=NegativeNum, FNNum=FNNum, PosNum=PosNum, error_cureve=error_curve)
@@ -215,15 +208,21 @@ class LightningDTModel(L.LightningModule):
             error_curve = self.validation_stats["depth"]["error_cureve"][:-1] / self.validation_stats["depth"]["PosNum"]
 
             # compute the Area under curve
-            AUC = np.sum(error_curve) / 10
+            AUC = np.mean(error_curve)
             self.log('val/AUC', AUC, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
+            num_bins = self.cfg.metric.num_bins
+            interval = self.cfg.metric.TF_rel_error_rate / num_bins
+            threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
 
+            # set x-y limit
+            plt.xlim(0, 1.)
+            plt.ylim(0, 1.)
             # draw the plot of the error curve
-            plt.plot(np.arange(0.1, 1.1, 0.1), error_curve)
+            plt.plot(threshold_ratio, error_curve)
             plt.xlabel("Threshold")
             plt.ylabel("Error Rate")
-
+            
             self.logger.experiment.add_figure("val/Error Curve", plt.gcf(), self.global_step)
             
     def configure_optimizers(self):
