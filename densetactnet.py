@@ -86,6 +86,26 @@ class FullDecoder(nn.Module):
         
         return x
     
+class ResnetEncoder(nn.Module):
+    def __init__(self, input_channels=7):
+        super(ResnetEncoder, self).__init__()
+        self.encoder = models.resnet152(pretrained=True)
+        self.encoder.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.encoder = nn.Sequential(*list(resnet.children())[:-2])
+        self.encoder[0] = nn.Conv2d(input_dim_size, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        
+    def forward(self, x):
+        x1 = self.encoder[0](x)  # conv1
+        x1 = self.encoder[1](x1)  # bn1
+        x1 = self.encoder[2](x1)  # relu
+        x1 = self.encoder[3](x1)  # maxpool
+        x2 = self.encoder[4](x1)  # layer1
+        x3 = self.encoder[5](x2)  # layer2
+        x4 = self.encoder[6](x3)  # layer3
+        x5 = self.encoder[7](x4)  # layer4
+        
+        return x1, x2, x3, x4, x5
+    
 class DensenetEncoder(nn.Module):
     def __init__(self, input_channels=7):
         super(DensenetEncoder, self).__init__()
@@ -105,8 +125,8 @@ class DensenetEncoder(nn.Module):
         
         return x1, x2, x3, x4, x5
 
-class DTDenseNet(nn.Module):
-    def __init__(self, input_channels=7, n_heads=1, head_output_channels=1):
+class DTNet(nn.Module):
+    def __init__(self, input_channels=7, n_heads=1, head_output_channels=1, encoder='densenet161'):
         super(DTDenseNet, self).__init__()
         
         # Encoder: Using a pre-trained DenseNet-161 model
@@ -135,7 +155,6 @@ class DTDenseNet(nn.Module):
         
         return outputs
     
-
     
 if __name__ == "__main__":
     # Instantiate the model
