@@ -9,3 +9,5 @@ runs/
 __pycache__/
 viz/
 viz_lightning/
+
+settings.json

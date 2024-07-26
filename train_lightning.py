@@ -23,7 +23,6 @@ import lightning as L
 from pytorch_lightning.loggers import TensorBoardLogger
 
 import argparse
-
 """
 
 Note: This is testing code and not final version of training code
