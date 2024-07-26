@@ -96,6 +96,8 @@ class FullDataset(Dataset):
         self.samples_dir = samples_dir
         self.transform = transform
         self.output_type = output_type
+
+        assert output_type in ['none', 'depth', 'full'], "Output type must be one of 'none', 'depth', 'full'"
         
         # get list of objects
         self.blender_info = self.read_blender_info_json('blender_info.json')
@@ -425,15 +427,19 @@ class FullDataset(Dataset):
         
         # normalize image diff
         image_diff = image_diff / 255.0
-        
+
+        # read only depth images
         if self.output_type == 'depth':
             relative_depth = cv2.imread(f'{self.samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
             relative_depth = relative_depth / 10000.0
             relative_depth = relative_depth - 1 
             y = relative_depth
-            
-        else:
-            
+
+            # apply transform
+            y = self.transform(y).float()
+
+        # read all labels
+        elif self.output_type == 'full':  
             # load bounds json
             with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
                 bounds = json.load(f)
@@ -487,10 +493,14 @@ class FullDataset(Dataset):
             data = np.concatenate(data, axis=2)
             y = data
 
+            # apply transform
+            y = self.transform(y).float()
+
+        elif self.output_type == 'none':
+            y = [0]
+
         X = (deformed_img_norm, undeformed_img_norm, image_diff)
         X = np.concatenate(X, axis=2)
-        
-        y = self.transform(y).float()
         X = self.transform(X).float()
         
         return X, y

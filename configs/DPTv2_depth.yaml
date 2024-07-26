@@ -1,0 +1,10 @@
+dataset_ratio: 1.0
+epoch: 100
+learning_rate: 0.001
+
+model:
+  name: DPT
+  out_chans: 1
+
+dataset:
+  output_type: "depth"

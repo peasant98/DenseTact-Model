@@ -185,3 +185,20 @@ class DPTV2Net(nn.Module):
         depth = self.depth_head(features, patch_h, patch_w)
 
         return depth
+    
+    def freeze_encoder(self):
+        for param in self.pretrained.parameters():
+            param.requires_grad = False
+
+    def unfreeze_encoder(self):
+        for param in self.pretrained.parameters():
+            param.requires_grad = True
+
+    def load_from_pretrained_model(self, model_path:str):
+        """
+        Load weights from a pre-trained model
+        """
+        model_ckpt = torch.load(model_path)
+
+        # load encoder weights
+        self.pretrained.load_state_dict(model_ckpt["model"]['pretrained'])

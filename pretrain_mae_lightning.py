@@ -157,10 +157,10 @@ if __name__ == '__main__':
 
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Resize((256, 256)),
+        transforms.Resize((256, 256), antialias=True),
     ])
     
-    dataset = FullDataset(transform=transform)
+    dataset = FullDataset(transform=transform, output_type='none')
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
 
@@ -198,9 +198,11 @@ if __name__ == '__main__':
     # log learning rate
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
+    strategy = "ddp" if opt.gpus > 1 else "auto"
+
     # add callbacks
     callbacks = [checkpoint_callback, lr_monitor]
     trainer = L.Trainer(max_epochs=opt.epochs, callbacks=callbacks, logger=logger,
-                        accelerator="gpu", devices=opt.gpus, strategy="ddp")
+                        accelerator="gpu", devices=opt.gpus, strategy=strategy)
     
     trainer.fit(model=calibration_model, train_dataloaders=dataloader, ckpt_path=opt.ckpt_path)
