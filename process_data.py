@@ -48,7 +48,6 @@ sample_id = manager.Value('i', 0)
 sample_id_lock = manager.Lock()
 
 
-
 def write_data(file_path, data, is_X = True, bounds_dict=None, y_imgs=None):
     global MAX
     if is_X:
@@ -67,11 +66,7 @@ def write_data(file_path, data, is_X = True, bounds_dict=None, y_imgs=None):
         
         _, cnorm_img, stress1_img, stress2_img, force_img, area_shear_img = y_imgs
         
-        # add extra dim to end of relative depth
         relative_depth = relative_depth[:,:,np.newaxis]
-        # output = np.concatenate([relative_depth, cnorm_output, stress_data1_output, stress_data2_output, force_data_output, area_shear_data_output], axis=2)
-        # save to npy file
-        # np.save(f'{file_path}/data.npy', output)
         
         # save each to png
         relative_depth = ((relative_depth + 1) * 10000).astype(np.uint16)
@@ -101,7 +96,7 @@ class FullDataset(Dataset):
         
         # get list of objects
         self.blender_info = self.read_blender_info_json('blender_info.json')
-        
+        # get output mask to only worry about DT
         self.output_mask = self.get_output_mask()
         
         self.min = np.inf
@@ -356,13 +351,9 @@ class FullDataset(Dataset):
         # apply mask to deformed depth
         deformed_depth = deformed_depth * mask
         undeformed_depth = undeformed_depth * mask
-        
         relative_depth = undeformed_depth - deformed_depth
         
-        # X is the deformed image, undeformed image, and image difference
-        # Y is the deformed depth, undeformed depth, and depth difference
         X = (deformed_img_norm, undeformed_img_norm, image_diff)
-        
         y = (relative_depth)
         
         return X, y
@@ -387,18 +378,11 @@ class FullDataset(Dataset):
     
     def get_output_mask(self):
         # output mask is based on the second value in the dataset
-        cnorm_img = cv2.imread(f'{self.samples_dir}/y2/cnorm.png')
-        cnorm_img = cv2.cvtColor(cnorm_img, cv2.COLOR_BGR2RGB)
-        
-        stress1_img = cv2.imread(f'{self.samples_dir}/y2/stress1.png')
-        stress1_img = cv2.cvtColor(stress1_img, cv2.COLOR_BGR2RGB)
-        
         cnorm_img = cv2.imread(f'{self.samples_dir}/y111/cnorm.png')
         cnorm_img = cv2.cvtColor(cnorm_img, cv2.COLOR_BGR2RGB)
         
         stress1_img = cv2.imread(f'{self.samples_dir}/y111/stress1.png')
         stress1_img = cv2.cvtColor(stress1_img, cv2.COLOR_BGR2RGB)
-        
         
         diff = stress1_img - cnorm_img
         mask = np.all(diff == [0, 0, 0], axis=-1).astype(np.uint8)
@@ -449,7 +433,6 @@ class FullDataset(Dataset):
             x1 = ((cnorm_img[:,:,0] / 255.0) * (bounds['CNORM']['max_val_r'] - bounds['CNORM']['min_val_r'])) + bounds['CNORM']['min_val_r']
             x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['CNORM']['max_val_g'] - bounds['CNORM']['min_val_g'])) + bounds['CNORM']['min_val_g']
             x3 = ((cnorm_img[:,:,2] / 255.0) * (bounds['CNORM']['max_val_b'] - bounds['CNORM']['min_val_b'])) + bounds['CNORM']['min_val_b']
-            
             
             cnorm = np.stack([x1, x2, x3], axis=2)
             # apply self.mask to cnorm
