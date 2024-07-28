@@ -1,0 +1,10 @@
+dataset_ratio: 0.4
+
+model:
+  name: DenseNetV2
+  out_chans: 1
+  encoder: "densenet"
+
+dataset:
+  output_type: "depth"
+  

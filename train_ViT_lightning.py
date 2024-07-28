@@ -90,13 +90,17 @@ class LightningDTModel(L.LightningModule):
                 self.logger.experiment.add_image('gt/diff_color', gt_diff_color, self.global_step)
         
         return {"loss": loss}
-    
-    def on_validation_epoch_start(self):
+
+    def reset_validation_stats(self):
+        """ resetting stats for val/test """
         self.validation_stats = {
             "mse": [],
         }
 
         self.validation_stats["depth"] = dict(NegativeNum=0, FNNum=0, PosNum=0, error_cureve=np.zeros(11))
+    
+    def on_validation_epoch_start(self):
+        self.reset_validation_stats()
 
     @torch.no_grad()
     def compute_metric(self, prediction:torch.Tensor, label:torch.Tensor):
@@ -156,7 +160,7 @@ class LightningDTModel(L.LightningModule):
         for key, item in current_step_dict.items():
             cumulative_metric_dict[key] += item
 
-    def validation_step(self, batch, batch_idx):
+    def _run_val_test_step(self, batch, batch_idx, name="val"):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
         X, Y = batch 
         N, C, H, W = X.shape 
@@ -165,16 +169,22 @@ class LightningDTModel(L.LightningModule):
         mse = self.mse(pred, Y)
 
         # outputs = torch.cat(outputs, dim=1)
-        self.log('val/mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log(f'{name}/mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         self.validation_stats["mse"].append(mse.item())
 
         depth_metric_dict = self.compute_metric(pred[:, 0, :, :], Y[:, 0, :, :])
         self.update_metric(self.validation_stats["depth"], depth_metric_dict)
+
+    def validation_step(self, batch, batch_idx):
+        self._run_val_test_step(batch, batch_idx, name="val")
     
-    def on_validation_epoch_end(self):
+    def summarize_metric(self, name="val"):
         avg_mse = np.array(self.validation_stats["mse"])
         avg_mse = np.mean(avg_mse)
-        self.log('val/avg_mse', avg_mse, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log(f'{name}/avg_mse', avg_mse, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+
+        psnr = 10 * np.log10(1.0 / avg_mse)
+        self.log(f'{name}/psnr', psnr, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
 
         if self.trainer.strategy == "ddp":
             # summarize the results from multiple GPUs
@@ -201,29 +211,55 @@ class LightningDTModel(L.LightningModule):
             FPR = self.validation_stats["depth"]["error_cureve"][-1] / self.validation_stats["depth"]["PosNum"]
 
             # log
-            self.log('val/FNR', FNR, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            self.log('val/FPR', FPR, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            self.log(f'{name}/FNR', FNR, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            self.log(f'{name}/FPR', FPR, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
             # draw the curve
             error_curve = self.validation_stats["depth"]["error_cureve"][:-1] / self.validation_stats["depth"]["PosNum"]
 
             # compute the Area under curve
             AUC = np.mean(error_curve)
-            self.log('val/AUC', AUC, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            self.log(f'{name}/AUC', AUC, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
             num_bins = self.cfg.metric.num_bins
             interval = self.cfg.metric.TF_rel_error_rate / num_bins
             threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
 
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+
             # set x-y limit
-            plt.xlim(0, 1.)
-            plt.ylim(0, 1.)
+            ax.set_xlim([0, 1])
+            ax.set_ylim([0, 1])
             # draw the plot of the error curve
-            plt.plot(threshold_ratio, error_curve)
-            plt.xlabel("Threshold")
-            plt.ylabel("Error Rate")
+            ax.plot(threshold_ratio, error_curve, label="Error Curve")
+            ax.set_xlabel("Threshold")
+            ax.set_ylabel("Error Rate")
             
-            self.logger.experiment.add_figure("val/Error Curve", plt.gcf(), self.global_step)
+            self.logger.experiment.add_figure("val/Error Curve", fig, self.global_step)
+
+            return dict(avg_mse=avg_mse, FNR=FNR, FPR=FPR, AUC=AUC, fig=fig)
+        
+        return None
+
+    def on_validation_epoch_end(self):
+        self.summarize_metric(name="val")
+
+    def on_test_epoch_start(self):
+        self.reset_validation_stats()
+
+    def test_step(self, batch, batch_idx):
+        self._run_val_test_step(batch, batch_idx, name="test")
+    
+    def on_test_epoch_end(self):
+        stats = self.summarize_metric(name="test")
+        if stats is not None:
+            printable = {key: value for key, value in stats.items() if key != "fig"}
+
+            from pprint import pprint
+            pprint(printable)
+
+            stats["fig"].savefig(osp.join(self.logger.save_dir, "test_error_curve.png"))
             
     def configure_optimizers(self):
         if self.cfg.optimizer.name == "Adam":
@@ -254,7 +290,9 @@ if __name__ == '__main__':
     cfg.merge_from_file(opt.config)
     # copy config file
     os.makedirs(opt.exp_name, exist_ok=True)
-    shutil.copy(opt.config, osp.join(opt.exp_name, 'config.yaml'))
+
+    if opt.config != osp.join(opt.exp_name, 'config.yaml'):
+        shutil.copy(opt.config, osp.join(opt.exp_name, 'config.yaml'))
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -303,7 +341,7 @@ if __name__ == '__main__':
                         accelerator="gpu", devices=opt.gpus, strategy=strategy)
     
     if opt.eval:
-        trainer.test(model=calibration_model, test_dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)
+        trainer.test(model=calibration_model, dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)
     else:
         trainer.fit(model=calibration_model, train_dataloaders=dataloader, 
                     ckpt_path=opt.ckpt_path, val_dataloaders=test_dataloader)

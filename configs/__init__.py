@@ -7,6 +7,7 @@ cfg.epochs = 100
 cfg.batch_size = 32
 cfg.num_workers = 16
 cfg.dataset_ratio = 1.
+# set this greater than 1.0 to disable finetune of encoder
 cfg.finetune_ratio = 0.8
 
 cfg.model = CN()
