@@ -18,7 +18,7 @@ import lightning as L
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 
-import models.model_mae as mae 
+from models import mae_vit_base_patch16, mae_hiera_base_256
 from util.loss_util import ssim
 
 class SILogLoss(nn.Module):
@@ -67,7 +67,7 @@ class LightningDTModel(L.LightningModule):
         """ MAE Model for training on the DT dataset """
         super(LightningDTModel, self).__init__()
         
-        self.model = mae.mae_vit_base_patch16(img_size=256, in_chans=7)
+        self.model = mae_vit_base_patch16(img_size=256, in_chans=7)
 
         self.criterion = nn.L1Loss()
         # self.criterion = nn.MSELoss()
