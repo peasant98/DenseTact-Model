@@ -10,4 +10,8 @@ __pycache__/
 viz/
 viz_lightning/
 
-settings.json
+.vscode/
+sim_dataset/
+real_dataset/
+real_world_data_v2/
+data_v2/
