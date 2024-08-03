@@ -28,6 +28,10 @@ class MaskedAutoencoderViT(nn.Module):
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
         super().__init__()
 
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.in_chans = in_chans
+
         # --------------------------------------------------------------------------
         # MAE encoder specifics
         self.in_chans = in_chans
@@ -218,6 +222,11 @@ class MaskedAutoencoderViT(nn.Module):
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
         loss = self.forward_loss(imgs, pred, mask)
         return loss, pred, mask
+    
+    def reconstruct_img(self, pred):
+        pred = pred.reshape(-1, self.img_size // self.patch_size, self.img_size // self.patch_size, self.patch_size, self.patch_size, self.in_chans).permute(0, 5, 1, 3, 2, 4)
+        pred = pred.reshape(-1, self.in_chans, self.img_size, self.img_size)
+        return pred
 
 
 def mae_vit_base_patch16_dec512d8b(**kwargs):

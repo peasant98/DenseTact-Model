@@ -202,3 +202,35 @@ class DPTV2Net(nn.Module):
 
         # load encoder weights
         self.pretrained.load_state_dict(model_ckpt["model"]['pretrained'])
+
+class DPHieraNet(nn.Module):
+    def __init__(
+        self, 
+        img_size=256,
+        patch_size=16,
+        in_chans=3,
+        encoder='vitl', 
+        features=256, 
+        out_channels=[256, 512, 1024, 1024], 
+        out_dims=15,
+        use_bn=False, 
+        use_clstoken=False
+    ):
+        # define the Hiera Encoder
+
+
+        # define the heira decoder
+
+        pass
+
+    def forward(self, x):
+        pass
+
+    def freeze_encoder(self):
+        pass
+
+    def unfreeze_encoder(self):
+        pass
+
+    def load_from_pretrained_model(self, model_path:str):
+        pass

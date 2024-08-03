@@ -237,6 +237,8 @@ class Hiera(nn.Module, PyTorchModelHubMixin):
         if isinstance(norm_layer, str):
             norm_layer = partial(getattr(nn, norm_layer), eps=1e-6)
 
+        self.input_size = input_size
+        self.in_chans = in_chans
         depth = sum(stages)
         self.patch_stride = patch_stride
         # # patch stride is the token shape

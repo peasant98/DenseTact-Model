@@ -1,6 +1,7 @@
 import os
 import os.path as osp
 import cv2
+import math
 import numpy as np
 import argparse
 
@@ -67,7 +68,10 @@ class LightningDTModel(L.LightningModule):
         """ MAE Model for training on the DT dataset """
         super(LightningDTModel, self).__init__()
         
-        self.model = mae_vit_base_patch16(img_size=256, in_chans=7)
+        if model_name == 'vit':
+            self.model = mae_vit_base_patch16(img_size=256, in_chans=7)
+        elif model_name == 'hiera':
+            self.model = mae_hiera_base_256(in_chans=7)
 
         self.criterion = nn.L1Loss()
         # self.criterion = nn.MSELoss()
@@ -90,8 +94,8 @@ class LightningDTModel(L.LightningModule):
         with torch.no_grad():
             pred = pred.detach().clone()
             X = X.detach().clone()
-            pred = pred.reshape(N, 16, 16, 16, 16, C).permute(0, 5, 1, 3, 2, 4)
-            pred = pred.reshape(N, C, H, W)
+            
+            pred = self.model.reconstruct_img(pred)
 
             # compute PSNR
             mse = self.mse(pred, X)
@@ -122,8 +126,13 @@ class LightningDTModel(L.LightningModule):
                 self.logger.experiment.add_image('gt/undeform_color', gt_undeform_color, self.global_step)
                 self.logger.experiment.add_image('gt/diff_color', gt_diff_color, self.global_step)
 
-                mask = mask.reshape(N, 16, 16)
-                mask = mask.repeat_interleave(16, dim=1).repeat_interleave(16, dim=2).unsqueeze(1) # to (N, 1, H, W)
+                # spatial tokens
+                spatial_num = mask.shape[1]
+                # assume square image
+                num = int(math.sqrt(spatial_num))
+                mask_shape = H // num
+                mask = mask.reshape(N, num, num)
+                mask = mask.repeat_interleave(mask_shape, dim=1).repeat_interleave(mask_shape, dim=2).unsqueeze(1) # to (N, 1, H, W)
                 mask = mask[0].detach().cpu().numpy()
                 self.logger.experiment.add_image('gt/mask', mask, self.global_step)
 
@@ -146,7 +155,8 @@ if __name__ == '__main__':
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
     arg.add_argument('--epochs', type=int, default=100)
     arg.add_argument('--gpus', type=int, default=1)
-    arg.add_argument('--batch_size', type=int, default=32)
+    arg.add_argument('--model', type=str, default="hiera", help="Model Architectire, choose either hiera or vit")
+    arg.add_argument('--batch_size', type=int, default=64)
     arg.add_argument('--num_workers', type=int, default=32)
     arg.add_argument('--mask_ratio', type=float, default=0.75)
     arg.add_argument('--exp_name', type=str, default="exp/DT_Model")
@@ -176,7 +186,7 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=True, num_workers=12)
 
     calibration_model = LightningDTModel(
-        model_name='vit', 
+        model_name=opt.model, 
         num_epochs=opt.epochs,
         total_steps=opt.epochs * len(train_dataset),
         mask_ratio=opt.mask_ratio,

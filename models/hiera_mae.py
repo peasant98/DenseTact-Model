@@ -148,7 +148,7 @@ class MaskedAutoencoderHiera(Hiera):
         self, input_img: torch.Tensor, mask: torch.Tensor, norm: bool = True
     ) -> torch.Tensor:
         # mask (boolean tensor): True must correspond to *masked*
-        input_img = input_img.permute(0, 2, 3, 1)
+        input_img = input_img.permute(0, 2, 3, 1) # (N, H, W, C)
 
         size = self.pred_stride
         label = input_img.unfold(1, size, size).unfold(2, size, size)
@@ -286,9 +286,21 @@ class MaskedAutoencoderHiera(Hiera):
             latent, mask
         )  # pred_mask is mask at resolution of *prediction*
 
-        # Toggle mask, to generate labels for *masked* tokens
-        return *self.forward_loss(x, pred, ~pred_mask), mask
+        # calculate loss
+        loss, _, label = self.forward_loss(x, pred, ~pred_mask)
 
+        # Toggle mask, to generate labels for *masked* tokens
+        return loss, pred, mask
+
+    def reconstruct_img(self, pred:torch.Tensor):
+        size = self.pred_stride
+        pred = pred.reshape(-1, self.input_size[0] // size, self.input_size[1] // size, self.in_chans, size, size)
+
+        pred = pred.permute(0, 1, 4, 2, 5, 3)
+        pred = pred.reshape(-1, self.input_size[0], self.input_size[1], self.in_chans)
+
+        pred = pred.permute(0, 3, 1, 2)
+        return pred
 
 # Image Models
 
@@ -320,9 +332,8 @@ def mae_hiera_base_224(**kwargs):
 
 def mae_hiera_base_256(**kwargs):
     return MaskedAutoencoderHiera(
-        embed_dim=96, num_heads=1, stages=(2, 3, 16, 3), q_pool=2, input_size=256, **kwargs,
+        embed_dim=96, num_heads=1, stages=(2, 3, 16, 3), q_pool=2, input_size=(256, 256), **kwargs,
     )
-
 
 @pretrained_model({
     "mae_in1k": "https://dl.fbaipublicfiles.com/hiera/mae_hiera_base_plus_224.pth",
@@ -334,7 +345,7 @@ def mae_hiera_base_plus_224(**kwargs):
 
 def mae_hiera_base_plus_256(**kwargs):
     return MaskedAutoencoderHiera(
-        embed_dim=112, num_heads=2, stages=(2, 3, 16, 3), q_pool=2, input_size=256, **kwargs,
+        embed_dim=112, num_heads=2, stages=(2, 3, 16, 3), q_pool=2, input_size=(256, 256), **kwargs,
     )
 
 
