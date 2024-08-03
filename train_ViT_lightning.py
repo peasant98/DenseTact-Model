@@ -311,7 +311,9 @@ if __name__ == '__main__':
     test_size = dataset_length - train_size
     cfg.total_steps = train_size * cfg.epochs
     
-    train_dataset, test_dataset, _ = random_split(dataset, [train_size, test_size, full_dataset_length - dataset_length])
+    train_dataset, test_dataset, _ = random_split(dataset, 
+                                                  [train_size, test_size, full_dataset_length - dataset_length],
+                                                  generator=torch.Generator().manual_seed(cfg.seed))
     print(f"Train dataset length: {len(train_dataset)}, Test dataset length: {len(test_dataset)}")
     
     dataloader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers)

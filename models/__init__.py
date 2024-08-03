@@ -2,6 +2,9 @@ from .dt_vit import dt_vit_base_patch16, dt_vit_large_patch16, dt_vit_huge_patch
 from .dpt import DPTV2Net
 from .dense import DTDenseNet, DTNet
 
+from .model_mae import mae_vit_base_patch16, mae_vit_large_patch16, mae_vit_huge_patch14
+from .hiera_mae import mae_hiera_base_256, mae_hiera_base_plus_256
+
 def build_model(cfg):
 
     # build model
