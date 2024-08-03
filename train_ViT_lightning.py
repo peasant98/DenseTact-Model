@@ -236,7 +236,7 @@ class LightningDTModel(L.LightningModule):
             ax.set_xlabel("Threshold")
             ax.set_ylabel("Error Rate")
             
-            self.logger.experiment.add_figure("val/Error Curve", fig, self.global_step)
+            self.logger.experiment.add_figure(f"{name}/Error Curve", fig, self.global_step)
 
             return dict(avg_mse=avg_mse, FNR=FNR, FPR=FPR, AUC=AUC, fig=fig)
         
@@ -279,7 +279,7 @@ class LightningDTModel(L.LightningModule):
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--gpus', type=int, default=1)
-    arg.add_argument('--exp_name', type=str, default="DT_Model")
+    arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/dt_vit.yaml")
     arg.add_argument('--eval', action='store_true')
@@ -323,12 +323,12 @@ if __name__ == '__main__':
     
     # create callback to save checkpoints
     checkpoint_callback = ModelCheckpoint(
-        monitor='val/avg_mse',
+        monitor='val/AUC',
         dirpath=osp.join(opt.exp_name, 'checkpoints/'),
-        filename='dt_model-{epoch:02d}-{val_mse:.2f}',
-        save_top_k=1,
+        filename='dt_model-{epoch:02d}-{AUC:.2f}',
+        save_top_k=3,
         save_last=True,
-        mode='min',
+        mode='max',
     )
 
     # log learning rate
@@ -345,3 +345,5 @@ if __name__ == '__main__':
     else:
         trainer.fit(model=calibration_model, train_dataloaders=dataloader, 
                     ckpt_path=opt.ckpt_path, val_dataloaders=test_dataloader)
+        
+        trainer.test(model=calibration_model, dataloaders=test_dataloader)

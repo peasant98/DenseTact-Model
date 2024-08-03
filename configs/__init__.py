@@ -29,7 +29,7 @@ cfg.optimizer.lr = 1e-3
 
 cfg.metric = CN()
 # value under this will be considered as negative
-cfg.metric.PN_thresh = 0.000001
+cfg.metric.PN_thresh = 0.0001
 # rel error ratio (%) under this will be considered as true positive
 cfg.metric.TF_rel_error_rate = 1.
 # For the curve

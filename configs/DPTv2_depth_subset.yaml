@@ -1,6 +1,5 @@
-dataset_ratio: 1.0
-epoch: 100
-learning_rate: 0.001
+dataset_ratio: 0.4
+batch_size: 16
 
 model:
   name: DPT
