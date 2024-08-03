@@ -3,6 +3,7 @@
 import json
 import os
 import pickle
+import argparse
 
 from matplotlib import pyplot as plt
 import torch
@@ -47,36 +48,27 @@ manager = Manager()
 sample_id = manager.Value('i', 0)
 sample_id_lock = manager.Lock()
 
-
-def write_data(file_path, data, is_X = True, bounds_dict=None, y_imgs=None):
+def write_data(file_path, data, is_X = True, bounds_dict=None):
     global MAX
     if is_X:
         deformed_img_norm, undeformed_img_norm, image_diff = data
         
+        # convert rgb to bgr
+        
         # save all to png
         cv2.imwrite(f'{file_path}/deformed.png', deformed_img_norm * 255)
         cv2.imwrite(f'{file_path}/undeformed.png', undeformed_img_norm * 255)
-        
         image_diff = (image_diff).astype(np.uint16)
-        
         cv2.imwrite(f'{file_path}/diff.png', image_diff)
         
     else:
-        relative_depth, cnorm_output, stress_data1_output, stress_data2_output, force_data_output, area_shear_data_output = data
-        
-        _, cnorm_img, stress1_img, stress2_img, force_img, area_shear_img = y_imgs
-        
-        relative_depth = relative_depth[:,:,np.newaxis]
+        cnorm_img, stress1_img, stress2_img, displacement_img, area_shear_img = data
         
         # save each to png
-        relative_depth = ((relative_depth + 1) * 10000).astype(np.uint16)
-        cv2.imwrite(f'{file_path}/depth.png', relative_depth)
-        
-        # convert all 
         cv2.imwrite(f'{file_path}/cnorm.png', cnorm_img)
         cv2.imwrite(f'{file_path}/stress1.png', stress1_img)
         cv2.imwrite(f'{file_path}/stress2.png', stress2_img)
-        cv2.imwrite(f'{file_path}/force.png', force_img)
+        cv2.imwrite(f'{file_path}/displacement.png', displacement_img)
         cv2.imwrite(f'{file_path}/area_shear.png', area_shear_img)
         
         # save bounds to json
@@ -84,28 +76,29 @@ def write_data(file_path, data, is_X = True, bounds_dict=None, y_imgs=None):
             json.dump(bounds_dict, f, indent=4)
         
 class FullDataset(Dataset):
-    def __init__(self, data_dir='output', transform=None, samples_dir='test_data', output_type='depth'):
-        self.root_dir = data_dir
-        self.configuration_dirs = sorted(os.listdir(data_dir))
-        self.data = []
+    def __init__(self, data_dir='output', transform=None, samples_dir='test_data', output_type='depth', root_dir='data_v2',
+                 is_real_world=False):
         self.samples_dir = samples_dir
+        self.root_dir = root_dir
         self.transform = transform
         self.output_type = output_type
 
         assert output_type in ['none', 'depth', 'full'], "Output type must be one of 'none', 'depth', 'full'"
+        self.is_real_world = is_real_world
         
-        # get list of objects
-        self.blender_info = self.read_blender_info_json('blender_info.json')
+        if self.is_real_world:
+            self.blender_info = self.read_blender_info_json('real_blender_info.json')
+        else:
+            self.blender_info = self.read_blender_info_json('blender_info.json')
+            
         # get output mask to only worry about DT
         self.output_mask = self.get_output_mask()
         
         self.min = np.inf
         self.max = -np.inf
         
-        if not os.path.exists(self.samples_dir):
-        # if True:
-            self._construct_dataset_from_json()
-            
+    def construct_dataset(self):
+        self._construct_dataset_from_json()
             
     def create_cache(self):
         self.cache = []
@@ -115,28 +108,22 @@ class FullDataset(Dataset):
             print("Cached", i)
             # add idx to cache
             
-            
     def read_blender_info_json(self, json_file):
         with open(json_file) as f:
             data = json.load(f)
         return data
     
     def read_csv(self, csv_file):
-        df = pd.read_csv(csv_file)
+        df = pd.read_csv(csv_file, on_bad_lines='skip')
         return df
     
     def get_data_from_frame_and_name(self, root, frame, name, data):
+        frame = int(frame)
         img_path = f'{root}/img_{name}_{frame}.png'
         # read image
         img = cv2.imread(img_path)
         
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        if name == 'CNAREA':
-            plt.imshow(img)
-            plt.show()
-            
-        print(img_path)
         
         # remove duplicates from data, data is a dataframe
         data = data.drop_duplicates(subset=['field'])
@@ -181,10 +168,6 @@ class FullDataset(Dataset):
         channel1 = ((img_r / 255.0) * (max_val_r - min_val_r)) + min_val_r
         channel2 = ((img_g / 255.0) * (max_val_g - min_val_g)) + min_val_g
         channel3 = ((img_b / 255.0) * (max_val_b - min_val_b)) + min_val_b
-        if name == 'CNAREA' or name == 'S11':
-            print(bounds_dict)
-            plt.imshow(channel1, cmap='viridis')
-            plt.show()
         
         # combine channels into one image
         combined = np.stack([channel1, channel2, channel3], axis=2)
@@ -201,29 +184,37 @@ class FullDataset(Dataset):
             path_split = path.split('/')
             configuration_dir = path_split[-2]
             folder_name = path_split[-1]
-            combined = os.path.join(configuration_dir, folder_name)
-            
+            combined = os.path.join(self.root_dir, configuration_dir, folder_name)
             files = os.listdir(combined)
             
             # files with csv
             csv_files = [f for f in files if f.endswith('.csv')]
             
-            undeformed_img_path = os.path.join(combined, f'img_0.png')
+            # undeformed_img_path = os.path.join(combined, f'img_0.png')
+            undeformed_img_path = os.path.join(combined, f'img_1.png')
             
             undeformed_img = self.read_image(undeformed_img_path)
-            undeformed_img = center_crop(undeformed_img, 50)
+            if self.is_real_world:
+                undeformed_img = crop_image(undeformed_img, 165, 115, 25, 25)
+            else:
+                undeformed_img = center_crop(undeformed_img, 50)
             
-            undeformed_depth_path = os.path.join(combined, f'img_0.exr')
-            undeformed_depth = read_exr_cv(undeformed_depth_path)
-            if undeformed_depth is  None:
-                undeformed_depth = read_exr_depth(undeformed_depth_path)
-                
             if len(csv_files) == 1:
                 df = self.read_csv(os.path.join(combined, csv_files[0]))
+                # remove cases where field is a string with length of 0
+                df = df[df['field'].str.len() > 0]
+                # remove rows where frame is na or inf or empty 
+                df = df[~df['frame'].isna()]
+                df = df[~df['frame'].isin([np.inf, -np.inf])]
                 
+                print(f"Processing {combined}")
+                df['frame'] = df['frame'].astype(int)
                 grouped = df.groupby('frame')
+                
+                # pool = Pool(processes=24)
                 pool = Pool(processes=1)
-                tasks = [(group, frame, combined, undeformed_img, undeformed_depth, self.transform) for frame, group in grouped]
+                
+                tasks = [(group, frame, combined, undeformed_img, self.transform) for frame, group in grouped]
                 for _ in tqdm(pool.imap_unordered(self.process_group, tasks), total=len(tasks), desc="Processing files in one press"):
                     pass
 
@@ -233,12 +224,13 @@ class FullDataset(Dataset):
     def process_group(self, args):
         global sample_id, sample_id_lock
         
+        # try:
         combined_dict = {}
         
-        group, frame, combined, undeformed_img, undeformed_depth, transform  = args
+        group, frame, combined, undeformed_img, transform  = args
 
         group['field'] = group['field'].str.replace(' ', '')
-
+        
         cnorm_data = group[(group['field'] == 'CNORMF-CNORMF1') | 
                         (group['field'] == 'CNORMF-CNORMF2') | 
                         (group['field'] == 'CNORMF-CNORMF3')]
@@ -257,14 +249,12 @@ class FullDataset(Dataset):
                             (group['field'] == 'S-S23')]
         stress_data2_output, stress2_img, bounds = self.get_data_from_frame_and_name(combined, frame, 'S12', stress_data2)
         combined_dict.update(bounds)
-        
 
-        force_data = group[(group['field'] == 'U-U1') | 
+        displacement_data = group[(group['field'] == 'U-U1') | 
                         (group['field'] == 'U-U2') | 
                         (group['field'] == 'U-U3')]
-        force_data_output, force_img, bounds = self.get_data_from_frame_and_name(combined, frame, 'UU1', force_data)
+        displacement_data_output, displacement_img, bounds = self.get_data_from_frame_and_name(combined, frame, 'UU1', displacement_data)
         combined_dict.update(bounds)
-        
 
         area_shear_data = group[(group['field'] == 'CNAREA') | 
                                 (group['field'] == 'CSHEAR1') | 
@@ -272,27 +262,23 @@ class FullDataset(Dataset):
         area_shear_data_output, area_shear_img, bounds = self.get_data_from_frame_and_name(combined, frame, 'CNAREA', area_shear_data)
         combined_dict.update(bounds)
 
-        X, y = self.construct_rgb_depth(undeformed_img, undeformed_depth, frame, combined)
-
-        deformed_img_norm, undeformed_img_norm, image_diff = X
+        X  = self.construct_rgb(undeformed_img, frame + 1, combined)
         
-        relative_depth = y
-        
-        X = (deformed_img_norm, undeformed_img_norm, image_diff)
-        y = (relative_depth, cnorm_output, stress_data1_output, stress_data2_output, force_data_output, area_shear_data_output)
-        y_imgs = (relative_depth, cnorm_img, stress1_img, stress2_img, force_img, area_shear_img)
+        y = (cnorm_img, stress1_img, stress2_img, displacement_img, area_shear_img)
         
         with sample_id_lock:
             sample_id.value += 1
             current_sample_id = sample_id.value
             
-        # os.makedirs(f'{self.samples_dir}/X{current_sample_id}', exist_ok=True)
-        # os.makedirs(f'{self.samples_dir}/y{current_sample_id}', exist_ok=True)
+        os.makedirs(f'{self.samples_dir}/X{current_sample_id}', exist_ok=True)
+        os.makedirs(f'{self.samples_dir}/y{current_sample_id}', exist_ok=True)
 
-        # write_data(f'{self.samples_dir}/X{current_sample_id}', X, is_X = True)
-        # write_data(f'{self.samples_dir}/y{current_sample_id}', y, is_X = False, bounds_dict=combined_dict, y_imgs=y_imgs)
+        write_data(f'{self.samples_dir}/X{current_sample_id}', X, is_X = True)
+        write_data(f'{self.samples_dir}/y{current_sample_id}', y, is_X = False, bounds_dict=combined_dict)
+        # except Exception as e: 
+        #     print("Skipping because of error...", e)
         
-    def construct_rgb_depth(self, undeformed_img, undeformed_depth, frame, combined):
+    def construct_rgb(self, undeformed_img, frame, combined):
         """
         Construct RGB inputs and depth output.
 
@@ -307,56 +293,32 @@ class FullDataset(Dataset):
         """
         deform_img_path = os.path.join(combined, f'img_{frame}.png')
         deformed_img = self.read_image(deform_img_path)
+        if self.is_real_world:
+            deformed_img = crop_image(deformed_img, 165, 115, 25, 25)
         
-        deformed_img = center_crop(deformed_img, 50)
+        else:
+            deformed_img = center_crop(deformed_img, 50)
         # undeformed_img = center_crop(undeformed_img, 90)
         
         # resize images to 512 by 512
         deformed_img = cv2.resize(deformed_img, (512, 512))
         undeformed_img = cv2.resize(undeformed_img, (512, 512))
         
-        depth_path = os.path.join(combined, f'img_{frame}.exr')
-        deformed_depth = read_exr_cv(depth_path)
-        
-        if deformed_depth is  None:
-            deformed_depth = read_exr_depth(depth_path)
+        # convert both to rgb
+        deformed_img = cv2.cvtColor(deformed_img, cv2.COLOR_BGR2RGB)
+        undeformed_img = cv2.cvtColor(undeformed_img, cv2.COLOR_BGR2RGB)
+
             
         hsv_img1 = cv2.cvtColor(deformed_img, cv2.COLOR_RGB2HSV)
         hsv_img2 = cv2.cvtColor(undeformed_img, cv2.COLOR_RGB2HSV)
 
-        deformed_depth = self.preprocess_depth(deformed_depth)
-        undeformed_depth = self.preprocess_depth(undeformed_depth)
-        
-        deformed_depth = center_crop(deformed_depth, 50)
-        undeformed_depth = center_crop(undeformed_depth, 50)
-        
-        deformed_depth = cv2.resize(deformed_depth, (512, 512))
-        undeformed_depth = cv2.resize(undeformed_depth, (512, 512))
-        
-        undeformed_depth = undeformed_depth / DEPTH_CONSTANT
-        deformed_depth = deformed_depth / DEPTH_CONSTANT
-        
         deformed_img_norm = deformed_img / 255.0
         undeformed_img_norm = undeformed_img / 255.0
         image_diff = cv2.subtract(hsv_img1[:,:,2], hsv_img2[:,:,2])
         
-        mask = np.ones_like(deformed_img)
-        mask[deformed_img == 0] = 0
-
-        # make mask 1 channel, make sure all channels are 0
-        mask = mask[:,:,0] + mask[:,:,1] + mask[:,:,2]        
-        
-        # take vals that are 0
-        mask[mask > 0] = 1 
-        # apply mask to deformed depth
-        deformed_depth = deformed_depth * mask
-        undeformed_depth = undeformed_depth * mask
-        relative_depth = undeformed_depth - deformed_depth
-        
         X = (deformed_img_norm, undeformed_img_norm, image_diff)
-        y = (relative_depth)
         
-        return X, y
+        return X
         
     def __len__(self):
         """length of the dataset
@@ -372,12 +334,17 @@ class FullDataset(Dataset):
     
     def read_image(self, image_path):
         img = cv2.imread(image_path)
-        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         return img
-    
     
     def get_output_mask(self):
         # output mask is based on the second value in the dataset
+        # if output_mask.png does not exist, create it
+        if os.path.exists('output_mask.png'):
+            self.output_mask = cv2.imread('output_mask.png', cv2.IMREAD_ANYDEPTH)
+            self.output_mask = self.output_mask / 255.0
+            return self.output_mask
+        
         cnorm_img = cv2.imread(f'{self.samples_dir}/y111/cnorm.png')
         cnorm_img = cv2.cvtColor(cnorm_img, cv2.COLOR_BGR2RGB)
         
@@ -388,6 +355,9 @@ class FullDataset(Dataset):
         mask = np.all(diff == [0, 0, 0], axis=-1).astype(np.uint8)
         # opposite mask
         mask = 1 - mask
+        
+        # save mask as png
+        cv2.imwrite(f'output_mask.png', mask * 255)
         
         return mask
         
@@ -499,8 +469,7 @@ class FullDataset(Dataset):
         return depth_image
     
     def __repr__(self) -> str:
-        return f'Depth Dataset with {self.__len__()} samples'
-    
+        return f'DenseTact Dataset with {self.__len__()} samples'
 
 
 def center_crop(image, crop_px):
@@ -546,22 +515,42 @@ def read_exr_cv(filename):
     # Open the EXR file
     exr_image = cv2.imread(filename, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
     return exr_image
+
+def crop_image(image, left, right, top, bottom):
+    shape = image.shape
+    if len(shape) == 2:
+        height, width = shape
+    else:
+        height, width, _ = shape
     
-    
+    cropped_image = image[top:height - bottom, left:width - right]
+    return cropped_image   
+
 if __name__ == '__main__':
-    samples_dir = 'test_data'
+    parser = argparse.ArgumentParser(description='Set dataset parameters dynamically')
+    parser.add_argument('--samples_dir', type=str, default='sim_dataset', help='Directory of the samples')
+    parser.add_argument('--root_dir', type=str, default='data_v2', help='Root directory of original dataset')
+    parser.add_argument('--is_real_world', type=bool, default=False, help='Flag to indicate if it is real world data')
+
+    args = parser.parse_args()
+
+    samples_dir = args.samples_dir
+    root_dir = args.root_dir
+    is_real_world = args.is_real_world
     
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize((256, 256), antialias=True),
     ])
     
-    dataset = FullDataset(transform=transform, samples_dir=samples_dir)
+    dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
+                          root_dir=root_dir, is_real_world=is_real_world, output_type='all')
     
-    dataset_length = len(dataset)
+    # use this line to construct the dataset
+    # dataset.construct_dataset()
     
-    # get random indices
-    indices = np.random.choice(dataset_length, 5000)
+    print("length of dataset", len(dataset))
     
-    for i in indices:
-        X, y = dataset[i]
+    X, y = dataset[100]
+    
+    print(X.shape, y.shape)
