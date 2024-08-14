@@ -7,21 +7,39 @@ cfg.epochs = 100
 cfg.batch_size = 32
 cfg.num_workers = 16
 cfg.dataset_ratio = 1.
-# set this greater than 1.0 to disable finetune of encoder
-cfg.finetune_ratio = 0.8
 # seed for every thing
 # include dataset split
-cfg.seed = 0.8
+cfg.seed = 42
 
 cfg.model = CN()
 cfg.model.name = "DPT"
 cfg.model.pretrained_model = ""
 cfg.model.img_size = 256
 cfg.model.patch_size = 16
-cfg.model.in_chans=7
-cfg.model.encoder='vitl'
-cfg.model.out_chans=15
+cfg.model.in_chans = 7
+cfg.model.encoder = 'vitl'
+cfg.model.out_chans = 15
 cfg.model.loss = "L1"
+
+# parameters for Hiera model
+cfg.model.hiera = CN()
+# this is the defaut for encoder
+cfg.model.hiera.embed_dim = 96
+cfg.model.hiera.num_heads = 1
+cfg.model.hiera.stages = [2, 3, 16, 3]
+cfg.model.hiera.q_pool = 2
+cfg.model.hiera.patch_stride = [4, 4]
+cfg.model.hiera.mlp_ratio = 4.0
+
+cfg.model.hiera.decoder = "DPT"
+# for DPT Decoder Head
+cfg.model.hiera.use_bn = False
+cfg.model.hiera.decoder_embed_dim = 256
+cfg.model.hiera.decoder_mapping_channels = [256, 512, 1024]
+
+# for Vanilla model
+cfg.model.hiera.decoder_num_heads = 1
+cfg.model.hiera.decoder_depth = 3
 
 cfg.dataset = CN()
 cfg.dataset.output_type = "depth"
@@ -29,6 +47,13 @@ cfg.dataset.output_type = "depth"
 cfg.optimizer = CN()
 cfg.optimizer.name = "Adam"
 cfg.optimizer.lr = 1e-3
+cfg.optimizer.eta_min = 1e-6
+
+cfg.scheduler = CN()
+# choose from cosine, linear_cosine
+cfg.scheduler.name = "cosine"
+# steps for linear warmup 
+cfg.scheduler.warmup = 2000
 
 cfg.metric = CN()
 # value under this will be considered as negative

@@ -52,7 +52,7 @@ class ResidualConvUnit(nn.Module):
 
         self.activation = activation
 
-        self.skip_add = nn.quantized.FloatFunctional()
+        # self.skip_add = nn.quantized.FloatFunctional()
 
     def forward(self, x):
         """Forward pass.
@@ -77,7 +77,7 @@ class ResidualConvUnit(nn.Module):
         if self.groups > 1:
             out = self.conv_merge(out)
 
-        return self.skip_add.add(out, x)
+        return out + x
 
 
 class FeatureFusionBlock(nn.Module):
@@ -103,7 +103,6 @@ class FeatureFusionBlock(nn.Module):
 
         self.deconv = deconv
         self.align_corners = align_corners
-
         self.groups=1
 
         self.expand = expand
@@ -116,9 +115,8 @@ class FeatureFusionBlock(nn.Module):
         self.resConfUnit1 = ResidualConvUnit(features, activation, bn)
         self.resConfUnit2 = ResidualConvUnit(features, activation, bn)
         
-        self.skip_add = nn.quantized.FloatFunctional()
-
-        self.size=size
+        # self.skip_add = nn.quantized.FloatFunctional()
+        self.size = size
 
     def forward(self, *xs, size=None):
         """Forward pass.
@@ -130,12 +128,13 @@ class FeatureFusionBlock(nn.Module):
 
         if len(xs) == 2:
             res = self.resConfUnit1(xs[1])
-            output = self.skip_add.add(output, res)
+            output += res
 
         output = self.resConfUnit2(output)
 
         if (size is None) and (self.size is None):
             modifier = {"scale_factor": 2}
+        
         elif size is None:
             modifier = {"size": self.size}
         else:

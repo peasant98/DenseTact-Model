@@ -145,7 +145,7 @@ class MaskedAutoencoderHiera(Hiera):
             nn.init.constant_(m.weight, 1.0)
 
     def get_pixel_label_2d(
-        self, input_img: torch.Tensor, mask: torch.Tensor, norm: bool = True
+        self, input_img: torch.Tensor, mask: torch.Tensor, norm: bool = False
     ) -> torch.Tensor:
         # mask (boolean tensor): True must correspond to *masked*
         input_img = input_img.permute(0, 2, 3, 1) # (N, H, W, C)
@@ -332,7 +332,7 @@ def mae_hiera_base_224(**kwargs):
 
 def mae_hiera_base_256(**kwargs):
     return MaskedAutoencoderHiera(
-        embed_dim=96, num_heads=1, stages=(2, 3, 16, 3), q_pool=2, input_size=(256, 256), **kwargs,
+        embed_dim=96, num_heads=1, stages=(2, 3, 16, 3), q_pool=2, **kwargs,
     )
 
 @pretrained_model({
@@ -345,7 +345,7 @@ def mae_hiera_base_plus_224(**kwargs):
 
 def mae_hiera_base_plus_256(**kwargs):
     return MaskedAutoencoderHiera(
-        embed_dim=112, num_heads=2, stages=(2, 3, 16, 3), q_pool=2, input_size=(256, 256), **kwargs,
+        embed_dim=112, num_heads=2, stages=(2, 3, 16, 3), q_pool=2, **kwargs,
     )
 
 
@@ -353,6 +353,11 @@ def mae_hiera_base_plus_256(**kwargs):
     "mae_in1k": "https://dl.fbaipublicfiles.com/hiera/mae_hiera_large_224.pth",
 }, default="mae_in1k")
 def mae_hiera_large_224(**kwargs):
+    return MaskedAutoencoderHiera(
+        embed_dim=144, num_heads=2, stages=(2, 6, 36, 4), q_pool=2, **kwargs,
+    )
+
+def mae_hiera_large_256(**kwargs):
     return MaskedAutoencoderHiera(
         embed_dim=144, num_heads=2, stages=(2, 6, 36, 4), q_pool=2, **kwargs,
     )

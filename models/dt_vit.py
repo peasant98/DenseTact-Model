@@ -186,23 +186,27 @@ class DTViT(nn.Module):
         
     def freeze_encoder(self):
         """ Freeze the encoder weights """
+        self.patch_embed.eval()
         for param in self.patch_embed.parameters():
             param.requires_grad = False
         
         self.cls_token.requires_grad = False
 
         for blk in self.blocks:
+            blk.eval()
             for param in blk.parameters():
                 param.requires_grad = False
     
     def unfreeze_encoder(self):
         """ Unfreeze the encoder """
+        self.patch_embed.train()
         for param in self.patch_embed.parameters():
             param.requires_grad = True
         
         self.cls_token.requires_grad = True
 
         for blk in self.blocks:
+            blk.train()
             for param in blk.parameters():
                 param.requires_grad = True
 

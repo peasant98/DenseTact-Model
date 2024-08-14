@@ -19,43 +19,9 @@ import lightning as L
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 
-from models import mae_vit_base_patch16, mae_hiera_base_256
+from models import pretrain_dict
 from util.loss_util import ssim
-
-class SILogLoss(nn.Module):
-    def __init__(self):
-        super(SILogLoss, self).__init__()
-
-    def forward(self, pred, target):
-        eps = 1e-7
-        pred_log = torch.log(pred + eps)
-        target_log = torch.log(target + eps)
-        diff_log = pred_log - target_log
-
-        diff_log_sq = diff_log ** 2
-        N = torch.numel(diff_log)
-        first_term = diff_log_sq.mean()
-
-        second_term = (diff_log.sum() ** 2) / (N ** 2)
-
-        return first_term - second_term
-
-class GradientLoss(nn.Module):
-    def __init__(self):
-        super(GradientLoss, self).__init__()
-
-    def forward(self, pred, target):
-        pred_dy, pred_dx = self.gradient(pred)
-        target_dy, target_dx = self.gradient(target)
-        grad_diff_y = torch.abs(pred_dy - target_dy)
-        grad_diff_x = torch.abs(pred_dx - target_dx)
-        return grad_diff_y.mean() + grad_diff_x.mean()
-
-    def gradient(self, x):
-        D_dy = x[:, :, 1:, :] - x[:, :, :-1, :]
-        D_dx = x[:, :, :, 1:] - x[:, :, :, :-1]
-        return D_dy, D_dx
-
+from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
 class LightningDTModel(L.LightningModule):
     def __init__(self, 
@@ -68,10 +34,12 @@ class LightningDTModel(L.LightningModule):
         """ MAE Model for training on the DT dataset """
         super(LightningDTModel, self).__init__()
         
-        if model_name == 'vit':
-            self.model = mae_vit_base_patch16(img_size=256, in_chans=7)
-        elif model_name == 'hiera':
-            self.model = mae_hiera_base_256(in_chans=7)
+        if model_name in pretrain_dict:
+            self.model = pretrain_dict[model_name](input_size=256, in_chans=7)
+        else:
+            print("Model {} not found in pretrain_dict".format(model_name))
+            print("Available models: {}".format(pretrain_dict.keys()))
+            exit()
 
         self.criterion = nn.L1Loss()
         # self.criterion = nn.MSELoss()
@@ -140,20 +108,19 @@ class LightningDTModel(L.LightningModule):
         return {"loss": loss, "train_psnr": psnr, "train_ssim": ssim_loss}
     
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.total_steps)
+        optimizer = optim.AdamW(self.model.parameters(), lr=self.learning_rate, betas=(0.9, 0.95), weight_decay=0.05)
+        scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_steps=10, T_max=self.num_epochs)
         return {"optimizer": optimizer, 
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "interval": "step",
-                    "monitor": "train_loss"
+                    "interval": "epoch"
                 }}
 
 
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
-    arg.add_argument('--epochs', type=int, default=100)
+    arg.add_argument('--epochs', type=int, default=150)
     arg.add_argument('--gpus', type=int, default=1)
     arg.add_argument('--model', type=str, default="hiera", help="Model Architectire, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=64)
@@ -190,14 +157,14 @@ if __name__ == '__main__':
         num_epochs=opt.epochs,
         total_steps=opt.epochs * len(train_dataset),
         mask_ratio=opt.mask_ratio,
-        learning_rate=1e-3
+        learning_rate=8e-4
     )
 
     logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
     
     # create callback to save checkpoints
     checkpoint_callback = ModelCheckpoint(
-        monitor='train_loss',
+        monitor='train/loss_epoch',
         dirpath=osp.join(opt.exp_name, 'checkpoints/'),
         filename='dt_model-{epoch:02d}-{train_loss:.2f}',
         save_top_k=1,

@@ -25,6 +25,7 @@ from configs import get_cfg_defaults
 
 from models import build_model
 from util.loss_util import ssim
+from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
 class LightningDTModel(L.LightningModule):
     def __init__(self, cfg):
@@ -56,12 +57,15 @@ class LightningDTModel(L.LightningModule):
             self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)
 
     def on_train_epoch_start(self):
+        """ 
+        I decide to always freeze the encoder when loading from a pretrained model 
+        If you want to finetune the encoder, you can load from a checkpoint and set the pretrained_model to ""
+        """
         if len(self.cfg.model.pretrained_model) > 0 :
             print("Freezing encoder when loading from pretrained model")
-            if self.trainer.current_epoch < self.cfg.finetune_ratio * self.num_epochs:
-                self.model.freeze_encoder()
-            else:
-                self.model.unfreeze_encoder()
+            self.model.freeze_encoder()
+            # else:
+            #     self.model.unfreeze_encoder()
             
     def training_step(self, batch, batch_idx):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
@@ -220,6 +224,8 @@ class LightningDTModel(L.LightningModule):
             # compute the Area under curve
             AUC = np.mean(error_curve)
             self.log(f'{name}/AUC', AUC, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            # for ckpt name
+            self.log('AUC', AUC * 100, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
             num_bins = self.cfg.metric.num_bins
             interval = self.cfg.metric.TF_rel_error_rate / num_bins
@@ -262,17 +268,24 @@ class LightningDTModel(L.LightningModule):
             stats["fig"].savefig(osp.join(self.logger.save_dir, "test_error_curve.png"))
             
     def configure_optimizers(self):
+        if len(self.cfg.model.pretrained_model) > 0 :
+            print("Freezing encoder when loading from pretrained model")
+            self.model.freeze_encoder()
+
         if self.cfg.optimizer.name == "Adam":
-            optimizer = optim.Adam(self.model.parameters(), lr=self.cfg.optimizer.lr)
+            optimizer = optim.Adam([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
         elif self.cfg.optimizer.name == "AdamW":
-            optimizer = optim.AdamW(self.model.parameters(), lr=self.cfg.optimizer.lr)
+            optimizer = optim.AdamW([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
         
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.total_steps)
+        if cfg.scheduler.name == "cosine":
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.total_steps, eta_min=cfg.optimizer.eta_min)
+        elif cfg.scheduler.name == "linear_cosine":
+            scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_steps=cfg.scheduler.warmup, T_max=self.total_steps, eta_min=cfg.optimizer.eta_min)
+
         return {"optimizer": optimizer, 
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "interval": "step",
-                    "monitor": "train_loss"
+                    "interval": "step"
                 }}
 
 
@@ -283,6 +296,7 @@ if __name__ == '__main__':
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/dt_vit.yaml")
     arg.add_argument('--eval', action='store_true')
+    arg.add_argument('--finetune', action='store_true')
     opt = arg.parse_args()
 
     # load config
@@ -309,7 +323,7 @@ if __name__ == '__main__':
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
     train_size = int(0.8 * dataset_length)
     test_size = dataset_length - train_size
-    cfg.total_steps = train_size * cfg.epochs
+    cfg.total_steps = train_size * cfg.epochs // (cfg.batch_size * opt.gpus)
     
     train_dataset, test_dataset, _ = random_split(dataset, 
                                                   [train_size, test_size, full_dataset_length - dataset_length],
@@ -325,7 +339,7 @@ if __name__ == '__main__':
     
     # create callback to save checkpoints
     checkpoint_callback = ModelCheckpoint(
-        monitor='val/AUC',
+        monitor='AUC',
         dirpath=osp.join(opt.exp_name, 'checkpoints/'),
         filename='dt_model-{epoch:02d}-{AUC:.2f}',
         save_top_k=3,
@@ -341,6 +355,12 @@ if __name__ == '__main__':
     callbacks = [checkpoint_callback, lr_monitor]
     trainer = L.Trainer(max_epochs=cfg.epochs, callbacks=callbacks, logger=logger,
                         accelerator="gpu", devices=opt.gpus, strategy=strategy)
+    
+    # only load states for finetuning
+    if opt.finetune:
+        model_state = torch.load(opt.ckpt_path)
+        calibration_model.load_state_dict(model_state["state_dict"])
+        opt.ckpt_path = None
     
     if opt.eval:
         trainer.test(model=calibration_model, dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)

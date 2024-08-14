@@ -208,7 +208,7 @@ class Hiera(nn.Module, PyTorchModelHubMixin):
     @has_config
     def __init__(
         self,
-        input_size: Tuple[int, ...] = (224, 224),
+        input_size: Union[int, Tuple[int, ...]] = (224, 224),
         in_chans: int = 3,
         embed_dim: int = 96,  # initial embed dim
         num_heads: int = 1,  # initial number of heads
@@ -237,8 +237,12 @@ class Hiera(nn.Module, PyTorchModelHubMixin):
         if isinstance(norm_layer, str):
             norm_layer = partial(getattr(nn, norm_layer), eps=1e-6)
 
+        if isinstance(input_size, int):
+            input_size = (input_size, input_size)
+
         self.input_size = input_size
         self.in_chans = in_chans
+        self.embed_dim = embed_dim
         depth = sum(stages)
         self.patch_stride = patch_stride
         # # patch stride is the token shape
@@ -393,6 +397,17 @@ class Hiera(nn.Module, PyTorchModelHubMixin):
         else:
             return self.pos_embed
 
+    def get_out_dim(self, return_intermediates) -> List[int]:
+        output_dims = []
+        if return_intermediates:
+            for i, blk in enumerate(self.blocks):
+                if i in self.stage_ends:
+                    output_dims.append(blk.dim_out)
+        else:
+            output_dims.append(self.blocks[-1].dim_out)
+
+        return output_dims
+
     def forward(
         self,
         x: torch.Tensor,
@@ -431,17 +446,17 @@ class Hiera(nn.Module, PyTorchModelHubMixin):
             if return_intermediates and i in self.stage_ends:
                 intermediates.append(self.reroll(x, i, mask=mask))
 
-        if mask is None:
-            x = x.mean(dim=1)
-            x = self.norm(x)
-            x = self.head(x)
-
         # x may not always be in spatial order here.
         # e.g. if q_pool = 2, mask_unit_size = (8, 8), and
         # q_stride = (2, 2), not all unrolls were consumed,
         # intermediates[-1] is x in spatial order
         if return_intermediates:
             return x, intermediates
+        
+        if mask is None:
+            x = x.mean(dim=1)
+            x = self.norm(x)
+            x = self.head(x)
 
         return x
 
