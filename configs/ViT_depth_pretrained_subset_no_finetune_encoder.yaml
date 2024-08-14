@@ -1,5 +1,4 @@
 dataset_ratio: 0.4
-finetune_ratio: 1.1
 
 model:
   name: ViT
