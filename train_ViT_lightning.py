@@ -276,17 +276,20 @@ class LightningDTModel(L.LightningModule):
             optimizer = optim.Adam([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
         elif self.cfg.optimizer.name == "AdamW":
             optimizer = optim.AdamW([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
-        
-        if cfg.scheduler.name == "cosine":
-            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.total_steps, eta_min=cfg.optimizer.eta_min)
-        elif cfg.scheduler.name == "linear_cosine":
-            scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_steps=cfg.scheduler.warmup, T_max=self.total_steps, eta_min=cfg.optimizer.eta_min)
 
-        return {"optimizer": optimizer, 
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "interval": "step"
-                }}
+        opt_config = dict(optimizer = optimizer)
+        
+        T_max = self.total_steps // (2 * self.cfg.scheduler.cycle_k + 1)
+        if cfg.scheduler.name == "cosine":
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=cfg.optimizer.eta_min)
+            opt_config["lr_scheduler"] = dict(scheduler=scheduler, interval="step")
+        elif cfg.scheduler.name == "linear_cosine":
+            scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_steps=cfg.scheduler.warmup, T_max=T_max, eta_min=cfg.optimizer.eta_min)
+            opt_config["lr_scheduler"] = dict(scheduler=scheduler, interval="step")
+        elif cfg.scheduler.name == "none":
+            pass
+
+        return opt_config
 
 
 if __name__ == '__main__':
@@ -354,7 +357,8 @@ if __name__ == '__main__':
     strategy = "ddp" if opt.gpus > 1 else "auto"
     callbacks = [checkpoint_callback, lr_monitor]
     trainer = L.Trainer(max_epochs=cfg.epochs, callbacks=callbacks, logger=logger,
-                        accelerator="gpu", devices=opt.gpus, strategy=strategy)
+                        accelerator="gpu", devices=opt.gpus, strategy=strategy,
+                        gradient_clip_val=cfg.gradient_clip_val, gradient_clip_algorithm=cfg.gradient_clip_algorithm)
     
     # only load states for finetuning
     if opt.finetune:

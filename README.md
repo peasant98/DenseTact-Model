@@ -25,3 +25,7 @@ Note:
 1. train / val split is controlled by the seed in the configuration file. To reproduce results, keep the seed as default. 
 
 2. 
+
+# TODOS
+
+1. Q Upsampling for Hiera Decoder

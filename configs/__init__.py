@@ -11,6 +11,9 @@ cfg.dataset_ratio = 1.
 # include dataset split
 cfg.seed = 42
 
+cfg.gradient_clip_val = None
+cfg.gradient_clip_algorithm = None
+
 cfg.model = CN()
 cfg.model.name = "DPT"
 cfg.model.pretrained_model = ""
@@ -54,6 +57,8 @@ cfg.scheduler = CN()
 cfg.scheduler.name = "cosine"
 # steps for linear warmup 
 cfg.scheduler.warmup = 2000
+# cycles for trainig (2k + 1)
+cfg.scheduler.cycle_k = 0
 
 cfg.metric = CN()
 # value under this will be considered as negative
