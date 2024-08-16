@@ -65,6 +65,8 @@ cfg.metric = CN()
 cfg.metric.PN_thresh = 0.0001
 # rel error ratio (%) under this will be considered as true positive
 cfg.metric.TF_rel_error_rate = 1.
+# abs error ratio (m) under this will be considered as true positive
+cfg.metric.TF_abs_error_thresh = 0.001
 # For the curve
 cfg.metric.num_bins = 10
 
