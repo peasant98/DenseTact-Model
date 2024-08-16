@@ -138,6 +138,7 @@ class FullDecoder(nn.Module):
         else: 
             # default to resnet
             start_features = [2048, 1536, 768, 320, 128]
+        
         self.decoder= nn.ModuleList([
             DecoderBlock(start_features[0], 1024, 1024),
             DecoderBlock(start_features[1], 1024, 512),
@@ -159,12 +160,12 @@ class FullDecoder(nn.Module):
         return x
     
 class ResnetEncoder(nn.Module):
-    def __init__(self, input_channels=7):
+    def __init__(self, cfg):
         super(ResnetEncoder, self).__init__()
-        self.encoder = models.resnet152(pretrained=True)
-        self.encoder.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.encoder = getattr(models, cfg.model.backbone)(pretrained=True)
+        self.encoder.conv1 = nn.Conv2d(cfg.model.in_chans, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.encoder = nn.Sequential(*list(self.encoder.children())[:-2])
-        self.encoder[0] = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.encoder[0] = nn.Conv2d(cfg.model.in_chans, 64, kernel_size=7, stride=2, padding=3, bias=False)
         
     def forward(self, x):
         x1 = self.encoder[0](x)  # conv1
@@ -179,10 +180,10 @@ class ResnetEncoder(nn.Module):
         return x1, x2, x3, x4, x5
     
 class DensenetEncoder(nn.Module):
-    def __init__(self, input_channels=7):
+    def __init__(self, cfg):
         super(DensenetEncoder, self).__init__()
-        self.encoder = models.densenet161(pretrained=True)
-        self.encoder.features.conv0 = nn.Conv2d(input_channels, 96, kernel_size=7, stride=2, padding=3, bias=False)
+        self.encoder = getattr(models, cfg.model.backbone)(pretrained=True)
+        self.encoder.features.conv0 = nn.Conv2d(cfg.model.in_chans, 96, kernel_size=7, stride=2, padding=3, bias=False)
     
     def forward(self, x):
         x1 = self.encoder.features.relu0(self.encoder.features.norm0(self.encoder.features.conv0(x)))
@@ -198,28 +199,33 @@ class DensenetEncoder(nn.Module):
         return x1, x2, x3, x4, x5
 
 class DTNet(nn.Module):
-    def __init__(self, in_chans=7, out_chans=[1], encoder='resnet'):
+    def __init__(self, cfg):
         super(DTNet, self).__init__()
         
         # Encoder: Using a pre-trained DenseNet-161 model
         encoder_features = None
-        if encoder == 'densenet':
-            self.encoder = DensenetEncoder(input_channels=in_chans)
-            encoder_features = 2208
-        elif encoder == 'resnet':
+        if cfg.model.encoder == 'densenet':
+            self.encoder = DensenetEncoder(cfg)
+            encoder_features = self.encoder.encoder.classifier.in_features
+            # remove classifier layer
+            del self.encoder.encoder.classifier
+        elif cfg.model.encoder == 'resnet':
             # default to resnet152
-            self.encoder = ResnetEncoder(input_channels=in_chans)
-            encoder_features = 2048
+            self.encoder = ResnetEncoder(cfg)
+            encoder_features = self.encoder.encoder.classifier.in_features
+            # remove the classifier layer
+            del self.encoder.classifier
         else:
-            raise NotImplementedError("Encoder not implemented {}".format(encoder))
+            raise NotImplementedError("Encoder not implemented {}".format(cfg.model.encoder))
         
         self.decoders = nn.ModuleList()
         # start with 1024 features in decoder
+        out_chans = [cfg.model.out_chans] if isinstance(cfg.model.out_chans, int) else cfg.model.out_chans
         self.decoder_features = 1024
         for head_output_channels in out_chans:
             # Decoder: Using a custom decoder
             self.decoders.append(FullDecoder(encoder_features, self.decoder_features, 
-                                             output_channels=head_output_channels, encoder=encoder))
+                                             output_channels=head_output_channels, encoder=cfg.model.encoder))
         
         
     def forward(self, x):

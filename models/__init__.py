@@ -25,7 +25,7 @@ def build_model(cfg):
     elif cfg.model.name == "DenseNet":
         model = DTDenseNet(out_chans=[cfg.model.out_chans])
     elif cfg.model.name == "DenseNetV2":
-        model = DTNet(in_chans=cfg.model.in_chans, out_chans=[cfg.model.out_chans], encoder=cfg.model.encoder)
+        model = DTNet(cfg)
     elif cfg.model.name == "HieraDPT":
         model = HieraDPT(cfg)
     else:

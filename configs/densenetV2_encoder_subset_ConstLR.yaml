@@ -8,4 +8,10 @@ model:
 
 dataset:
   output_type: "depth"
+
+optimizer:
+  name: AdamW
+
+scheduler:
+  name: "none"
   

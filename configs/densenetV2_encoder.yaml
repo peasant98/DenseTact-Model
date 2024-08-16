@@ -1,4 +1,4 @@
-dataset_ratio: 0.4
+dataset_ratio: 1.0
 
 model:
   name: DenseNetV2
@@ -8,4 +8,10 @@ model:
 
 dataset:
   output_type: "depth"
+
+optimizer:
+  name: AdamW
+
+scheduler:
+  name: "none"
   

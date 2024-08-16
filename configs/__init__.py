@@ -23,6 +23,7 @@ cfg.model.in_chans = 7
 cfg.model.encoder = 'vitl'
 cfg.model.out_chans = 15
 cfg.model.loss = "L1"
+cfg.model.backbone = ""
 
 # parameters for Hiera model
 cfg.model.hiera = CN()
