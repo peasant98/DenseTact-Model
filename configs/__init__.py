@@ -25,6 +25,10 @@ cfg.model.out_chans = 15
 cfg.model.loss = "L1"
 cfg.model.backbone = ""
 
+cfg.model.cnn = CN()
+cfg.model.cnn.decoder_mid_dim = [1024, 1024, 512, 256, 64]
+cfg.model.cnn.decoder_output_dim = [1024, 512, 256, 128, 64]
+
 # parameters for Hiera model
 cfg.model.hiera = CN()
 # this is the defaut for encoder

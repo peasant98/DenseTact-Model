@@ -73,9 +73,9 @@ class DTDenseNet(nn.Module):
 
 class DecoderHead(nn.Module):
     """Decoder head module."""
-    def __init__(self, output_channels=1):
+    def __init__(self, in_chans=64, output_channels=1):
         super(DecoderHead, self).__init__()
-        self.conv1 = nn.Conv2d(64, output_channels, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(in_chans, output_channels, kernel_size=3, padding=1)
         self.tanh = nn.Tanh()
         
     def forward(self, x):
@@ -130,24 +130,35 @@ class ResizeConv(nn.Module):
         return x
     
 class FullDecoder(nn.Module):
-    def __init__(self, encoder_num_features, decoder_features, output_channels=1, encoder='densenet'):
+    def __init__(self, encoder_num_features, decoder_features,
+                        decoder_mid_dim, decoder_output_dim,
+                        output_channels=1):
+        """
+        Full Decoder of DenseNet
+        encoder_num_features List[int]: number of features from the encoder, from deep to shallow 
+        decoder_features int: number of features in the first layer of the decoder
+        decoder_mid_dim List[int]: number of features in the middle of the decoder
+        decoder_output_dim List[int]: number of features in the output of the decoder
+        output_channels int: number of output channels
+        """
         super(FullDecoder, self).__init__()
-        self.conv_resize = ResizeConv(encoder_num_features, decoder_features)
-        if encoder == 'densenet':
-            start_features = [2080, 1408, 704, 352, 128]
-        else: 
-            # default to resnet
-            start_features = [2048, 1536, 768, 320, 128]
+        self.conv_resize = ResizeConv(encoder_num_features[0], decoder_features)
         
-        self.decoder= nn.ModuleList([
-            DecoderBlock(start_features[0], 1024, 1024),
-            DecoderBlock(start_features[1], 1024, 512),
-            DecoderBlock(start_features[2], 512, 256),
-            DecoderBlock(start_features[3], 256, 128),
-            DecoderBlock(start_features[4], 64),
-        ])
+        self.decoder = nn.ModuleList()
+        for i in range(1, len(encoder_num_features)):
+            if i == 1:
+                decoder_input_dim = decoder_features + encoder_num_features[i]
+            else:
+                decoder_input_dim = decoder_output_dim[i - 2] + encoder_num_features[i]
+            
+            self.decoder.append(DecoderBlock(decoder_input_dim,
+                                             decoder_mid_dim[i - 1],
+                                             decoder_output_dim[i - 1]))
         
-        self.head = DecoderHead(output_channels)
+        # no concatenation in the last layer
+        self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1], decoder_output_dim[-1]))
+        
+        self.head = DecoderHead(decoder_output_dim[-1], output_channels)
         
     def forward(self, x, skip_connections):
         x = self.conv_resize(x)
@@ -163,10 +174,18 @@ class ResnetEncoder(nn.Module):
     def __init__(self, cfg):
         super(ResnetEncoder, self).__init__()
         self.encoder = getattr(models, cfg.model.backbone)(pretrained=True)
+        last_feat_dim = self.encoder.fc.in_features
+
         self.encoder.conv1 = nn.Conv2d(cfg.model.in_chans, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.encoder = nn.Sequential(*list(self.encoder.children())[:-2])
         self.encoder[0] = nn.Conv2d(cfg.model.in_chans, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        
+
+        self.feature_channels = [ last_feat_dim,
+                                self.encoder[7][0].conv1.in_channels,
+                                self.encoder[6][0].conv1.in_channels, 
+                                self.encoder[5][0].conv1.in_channels,
+                                self.encoder[4][0].conv1.in_channels]
+
     def forward(self, x):
         x1 = self.encoder[0](x)  # conv1
         x1 = self.encoder[1](x1)  # bn1
@@ -179,12 +198,29 @@ class ResnetEncoder(nn.Module):
         
         return x1, x2, x3, x4, x5
     
+    def get_feature_channels(self):
+        """ get feature channels from the encoder, from deep to shallow """
+        return self.feature_channels
+    
 class DensenetEncoder(nn.Module):
     def __init__(self, cfg):
         super(DensenetEncoder, self).__init__()
         self.encoder = getattr(models, cfg.model.backbone)(pretrained=True)
-        self.encoder.features.conv0 = nn.Conv2d(cfg.model.in_chans, 96, kernel_size=7, stride=2, padding=3, bias=False)
-    
+        self.feature_channels = [ self.encoder.classifier.in_features,
+                                self.encoder.features.denseblock4.denselayer1.norm1.num_features,
+                                self.encoder.features.denseblock3.denselayer1.norm1.num_features, 
+                                self.encoder.features.denseblock2.denselayer1.norm1.num_features,
+                                self.encoder.features.denseblock1.denselayer1.norm1.num_features]
+
+        self.in_chans = cfg.model.in_chans
+        # modify the first layer to accept 7 channels
+        out_channels = self.encoder.features.conv0.out_channels
+        kernel_size = self.encoder.features.conv0.kernel_size
+        stride = self.encoder.features.conv0.stride
+        padding = self.encoder.features.conv0.padding
+        have_bias = self.encoder.features.conv0.bias is not None
+        self.encoder.features.conv0 = nn.Conv2d(cfg.model.in_chans, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=have_bias)
+
     def forward(self, x):
         x1 = self.encoder.features.relu0(self.encoder.features.norm0(self.encoder.features.conv0(x)))
         x1 = self.encoder.features.pool0(x1)
@@ -195,8 +231,12 @@ class DensenetEncoder(nn.Module):
         x4 = self.encoder.features.denseblock3(x3)
         x4 = self.encoder.features.transition3(x4)
         x5 = self.encoder.features.denseblock4(x4)
-        
+
         return x1, x2, x3, x4, x5
+    
+    def get_feature_channels(self):
+        """ get feature channels from the encoder, from deep to shallow """
+        return self.feature_channels
 
 class DTNet(nn.Module):
     def __init__(self, cfg):
@@ -206,26 +246,28 @@ class DTNet(nn.Module):
         encoder_features = None
         if cfg.model.encoder == 'densenet':
             self.encoder = DensenetEncoder(cfg)
-            encoder_features = self.encoder.encoder.classifier.in_features
             # remove classifier layer
             del self.encoder.encoder.classifier
-        elif cfg.model.encoder == 'resnet':
+        # resnet series
+        elif cfg.model.encoder in ['resnet', 'resnext']:
             # default to resnet152
             self.encoder = ResnetEncoder(cfg)
-            encoder_features = self.encoder.encoder.classifier.in_features
             # remove the classifier layer
-            del self.encoder.classifier
+            # this has been done in the __init__ function
         else:
             raise NotImplementedError("Encoder not implemented {}".format(cfg.model.encoder))
+        
+        encoder_features = self.encoder.get_feature_channels()
         
         self.decoders = nn.ModuleList()
         # start with 1024 features in decoder
         out_chans = [cfg.model.out_chans] if isinstance(cfg.model.out_chans, int) else cfg.model.out_chans
-        self.decoder_features = 1024
+        self.decoder_features = 1024 + 512
         for head_output_channels in out_chans:
             # Decoder: Using a custom decoder
             self.decoders.append(FullDecoder(encoder_features, self.decoder_features, 
-                                             output_channels=head_output_channels, encoder=cfg.model.encoder))
+                                            cfg.model.cnn.decoder_mid_dim, cfg.model.cnn.decoder_output_dim,
+                                            output_channels=head_output_channels))
         
         
     def forward(self, x):

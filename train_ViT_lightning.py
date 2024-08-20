@@ -6,6 +6,7 @@ import shutil
 import numpy as np
 import argparse
 from typing import Dict
+from weakref import proxy
 from copy import deepcopy
 
 from matplotlib import pyplot as plt
@@ -27,12 +28,6 @@ from configs import get_cfg_defaults
 from models import build_model
 from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
-
-class DDPModelCheckpoint(ModelCheckpoint):
-    def _save_topk_checkpoint(self, trainer: L.Trainer, monitor_candidates: Dict[str, torch.Tensor]) -> None:
-        # only save check points in the rank = 0
-        if trainer.global_rank == 0:
-            super()._save_topk_checkpoint(trainer, monitor_candidates)
 
 class LightningDTModel(L.LightningModule):
     def __init__(self, cfg):
@@ -298,8 +293,8 @@ class LightningDTModel(L.LightningModule):
             # gather the results from all GPUs
             dist.all_gather_object(output, sync_data)
             
-            if self.global_rank == 0:
-                print("collected AUC: ", output) # debug purpose
+            # debug purpose
+            print(f"collected AUC {output} rank {self.global_rank}") 
 
             AUC = sum(output)
             self.log('AUC', AUC, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
@@ -400,7 +395,7 @@ if __name__ == '__main__':
     logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
     
     # create callback to save checkpoints
-    checkpoint_callback = DDPModelCheckpoint(
+    checkpoint_callback = ModelCheckpoint(
         monitor='AUC',
         dirpath=osp.join(opt.exp_name, 'checkpoints/'),
         filename='dt_model-{epoch:02d}-{AUC:.2f}',
