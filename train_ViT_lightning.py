@@ -5,6 +5,7 @@ import torch.distributed as dist
 import shutil
 import numpy as np
 import argparse
+from typing import Dict
 from copy import deepcopy
 
 from matplotlib import pyplot as plt
@@ -26,6 +27,12 @@ from configs import get_cfg_defaults
 from models import build_model
 from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
+
+class DDPModelCheckpoint(ModelCheckpoint):
+    def _save_topk_checkpoint(self, trainer: L.Trainer, monitor_candidates: Dict[str, torch.Tensor]) -> None:
+        # only save check points in the rank = 0
+        if trainer.global_rank == 0:
+            super()._save_topk_checkpoint(trainer, monitor_candidates)
 
 class LightningDTModel(L.LightningModule):
     def __init__(self, cfg):
@@ -145,7 +152,7 @@ class LightningDTModel(L.LightningModule):
 
         # compute the false negative
         NegativeNum = torch.sum(Neg_mask).item()
-        FNNum = torch.sum(Neg_mask * (torch.abs(prediction_flatten) >= eps))
+        FNNum = torch.sum(Neg_mask * (torch.abs(prediction_flatten) >= eps)).item()
 
         # compute the error curve
         gt_pos_items = label_flatten[Pos_mask]
@@ -206,20 +213,20 @@ class LightningDTModel(L.LightningModule):
         psnr = 10 * np.log10(1.0 / avg_mse)
         self.log(f'{name}/psnr', psnr, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
 
-        if self.trainer.strategy == "ddp":
+        if dist.is_initialized():
             # summarize the results from multiple GPUs
             output = [None for _ in range(dist.get_world_size())]
 
             # gather the results from all GPUs
-            dist.all_gather_object(output, self.validation_stats, async_op=True)
+            dist.all_gather_object(output, self.validation_stats)
 
             if self.global_rank == 0:
                 # sum to the validation stats
                 for stats in output[1:]:
                     
-                    for key, item in stats:
+                    for key, item in stats.items():
                         if isinstance(item, dict):
-                            self.validation_stats[key] = self.update_metric(self.validation_stats[key], item)
+                            self.update_metric(self.validation_stats[key], item)
                         else:
                             self.validation_stats[key] += stats[key]
         
@@ -249,7 +256,7 @@ class LightningDTModel(L.LightningModule):
             self.log(f'{name}/AUC_abs', AUC_abs, on_step=False, on_epoch=True, prog_bar=True, logger=True)
             
             # for ckpt name
-            self.log('AUC', AUC_abs * 100, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            # self.log('AUC', AUC_abs * 100, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
             num_bins = self.cfg.metric.num_bins
             interval = self.cfg.metric.TF_rel_error_rate / num_bins
@@ -282,6 +289,23 @@ class LightningDTModel(L.LightningModule):
             ax.set_xlabel("Threshold")
             ax.set_ylabel("Error Rate")
             self.logger.experiment.add_figure(f"{name}/Abs Error Curve", fig, self.global_step)
+
+        sync_data = AUC_abs * 100 if self.global_rank == 0 else 0
+        if dist.is_initialized():
+            # boardcast to all GPUS
+            output = [None for _ in range(dist.get_world_size())]
+
+            # gather the results from all GPUs
+            dist.all_gather_object(output, sync_data)
+            
+            if self.global_rank == 0:
+                print("collected AUC: ", output) # debug purpose
+
+            AUC = sum(output)
+            self.log('AUC', AUC, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        else:
+            # normal case
+            self.log('AUC', sync_data, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
     def on_validation_epoch_end(self):
         self.summarize_metric(name="val")
@@ -376,11 +400,12 @@ if __name__ == '__main__':
     logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
     
     # create callback to save checkpoints
-    checkpoint_callback = ModelCheckpoint(
+    checkpoint_callback = DDPModelCheckpoint(
         monitor='AUC',
         dirpath=osp.join(opt.exp_name, 'checkpoints/'),
         filename='dt_model-{epoch:02d}-{AUC:.2f}',
         save_top_k=3,
+        verbose=True,
         save_last=True,
         mode='max',
     )
@@ -389,7 +414,7 @@ if __name__ == '__main__':
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
     # add callbacks
-    strategy = "ddp" if opt.gpus > 1 else "auto"
+    strategy = "ddp_find_unused_parameters_true" if opt.gpus > 1 else "auto"
     callbacks = [checkpoint_callback, lr_monitor]
     trainer = L.Trainer(max_epochs=cfg.epochs, callbacks=callbacks, logger=logger,
                         accelerator="gpu", devices=opt.gpus, strategy=strategy,
