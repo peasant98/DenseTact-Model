@@ -76,7 +76,7 @@ def write_data(file_path, data, is_X = True, bounds_dict=None):
             json.dump(bounds_dict, f, indent=4)
         
 class FullDataset(Dataset):
-    def __init__(self, data_dir='output', transform=None, samples_dir='test_data', output_type='depth', root_dir='data_v2',
+    def __init__(self, data_dir='output', transform=None, samples_dir='../DenseTact-Calibration-M/sim_dataset', output_type='depth', root_dir='../DenseTact-Calibration-M/data_v2',
                  is_real_world=False):
         self.samples_dir = samples_dir
         self.root_dir = root_dir

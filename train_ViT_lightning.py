@@ -268,7 +268,6 @@ class LightningDTModel(L.LightningModule):
             ax.set_xlabel("Threshold")
             ax.set_ylabel("Error Rate")
             self.logger.experiment.add_figure(f"{name}/Rel Error Curve", fig, self.global_step)
-            fig.clf()
 
             # draw the plot of the abs error curve
             abs_interval = self.cfg.metric.TF_abs_error_thresh / num_bins
