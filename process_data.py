@@ -76,7 +76,7 @@ def write_data(file_path, data, is_X = True, bounds_dict=None):
             json.dump(bounds_dict, f, indent=4)
         
 class FullDataset(Dataset):
-    def __init__(self, data_dir='output', transform=None, samples_dir='../DenseTact-Calibration-M/sim_dataset', output_type='depth', root_dir='../DenseTact-Calibration-M/data_v2',
+    def __init__(self,  transform=None, samples_dir='../Documents/Dataset/sim_dataset', output_type='depth', root_dir='../Documents/Dataset/data_v2',
                  is_real_world=False):
         self.samples_dir = samples_dir
         self.root_dir = root_dir
@@ -527,8 +527,8 @@ def crop_image(image, left, right, top, bottom):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Set dataset parameters dynamically')
-    parser.add_argument('--samples_dir', type=str, default='../DenseTact-Calibration-M/sim_dataset', help='Directory of the samples')
-    parser.add_argument('--root_dir', type=str, default='../DenseTact-Calibration-M/data_v2', help='Root directory of original dataset')
+    parser.add_argument('--samples_dir', type=str, default='../Documents/Dataset/sim_dataset', help='Directory of the samples')
+    parser.add_argument('--root_dir', type=str, default='../Documents/Dataset/data_v2', help='Root directory of original dataset')
     parser.add_argument('--is_real_world', type=bool, default=False, help='Flag to indicate if it is real world data')
 
     args = parser.parse_args()
