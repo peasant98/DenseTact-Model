@@ -173,7 +173,7 @@ class FullDecoder(nn.Module):
 class ResnetEncoder(nn.Module):
     def __init__(self, cfg):
         super(ResnetEncoder, self).__init__()
-        self.encoder = getattr(models, cfg.model.backbone)(pretrained=True)
+        self.encoder = getattr(models, cfg.model.backbone)(pretrained=cfg.model.imagenet_pretrained)
         last_feat_dim = self.encoder.fc.in_features
 
         self.encoder.conv1 = nn.Conv2d(cfg.model.in_chans, 64, kernel_size=7, stride=2, padding=3, bias=False)

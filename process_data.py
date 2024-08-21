@@ -76,7 +76,7 @@ def write_data(file_path, data, is_X = True, bounds_dict=None):
             json.dump(bounds_dict, f, indent=4)
         
 class FullDataset(Dataset):
-    def __init__(self, data_dir='output', transform=None, samples_dir='test_data', output_type='depth', root_dir='data_v2',
+    def __init__(self,  transform=None, samples_dir='../Documents/Dataset/sim_dataset', output_type='depth', root_dir='../Documents/Dataset/data_v2',
                  is_real_world=False):
         self.samples_dir = samples_dir
         self.root_dir = root_dir
@@ -363,7 +363,6 @@ class FullDataset(Dataset):
         
     def __getitem__(self, idx):
         """Get item in dataset. Will get either depth or whole output suite"""
-        
         sample_num = idx + 1
         # read deformed and undeformed images
         deformed_img_norm = cv2.imread(f'{self.samples_dir}/X{sample_num}/deformed.png')
@@ -425,11 +424,11 @@ class FullDataset(Dataset):
             stress2 = np.stack([x1, x2, x3], axis=2)
             stress2 = stress2 * self.output_mask[:,:,np.newaxis]
             
-            force_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/force.png')
-            force_img = cv2.cvtColor(force_img, cv2.COLOR_BGR2RGB)
-            x1 = ((force_img[:,:,0] / 255.0) * (bounds['UU1']['max_val_r'] - bounds['UU1']['min_val_r'])) + bounds['UU1']['min_val_r']
-            x2 = ((force_img[:,:,1] / 255.0) * (bounds['UU1']['max_val_g'] - bounds['UU1']['min_val_g'])) + bounds['UU1']['min_val_g']
-            x3 = ((force_img[:,:,2] / 255.0) * (bounds['UU1']['max_val_b'] - bounds['UU1']['min_val_b'])) + bounds['UU1']['min_val_b']
+            displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/displacement.png')
+            displacement_img = cv2.cvtColor(displacement_img, cv2.COLOR_BGR2RGB)
+            x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['UU1']['max_val_r'] - bounds['UU1']['min_val_r'])) + bounds['UU1']['min_val_r']
+            x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['UU1']['max_val_g'] - bounds['UU1']['min_val_g'])) + bounds['UU1']['min_val_g']
+            x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['UU1']['max_val_b'] - bounds['UU1']['min_val_b'])) + bounds['UU1']['min_val_b']
             displacement = np.stack([x1, x2, x3], axis=2)
             displacement = displacement * self.output_mask[:,:,np.newaxis]
             
@@ -528,8 +527,8 @@ def crop_image(image, left, right, top, bottom):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Set dataset parameters dynamically')
-    parser.add_argument('--samples_dir', type=str, default='sim_dataset', help='Directory of the samples')
-    parser.add_argument('--root_dir', type=str, default='data_v2', help='Root directory of original dataset')
+    parser.add_argument('--samples_dir', type=str, default='../Documents/Dataset/sim_dataset', help='Directory of the samples')
+    parser.add_argument('--root_dir', type=str, default='../Documents/Dataset/data_v2', help='Root directory of original dataset')
     parser.add_argument('--is_real_world', type=bool, default=False, help='Flag to indicate if it is real world data')
 
     args = parser.parse_args()
@@ -544,13 +543,57 @@ if __name__ == '__main__':
     ])
     
     dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
-                          root_dir=root_dir, is_real_world=is_real_world, output_type='all')
+                          root_dir=root_dir, is_real_world=is_real_world, output_type='full')
     
     # use this line to construct the dataset
     # dataset.construct_dataset()
     
     print("length of dataset", len(dataset))
     
-    X, y = dataset[100]
+    X, y = dataset[20]
     
-    print(X.shape, y.shape)
+    # X is shape 7, 256, 256
+    deformed_img_norm = X[0:3]
+    undeformed_img_norm = X[3:6]
+    image_diff = X[6]
+    
+    # reshape to python image format
+    deformed_img_norm = deformed_img_norm.permute(1, 2, 0).numpy()
+    undeformed_img_norm = undeformed_img_norm.permute(1, 2, 0).numpy()
+    image_diff = image_diff.numpy()
+    
+    # visualize the images
+    cnorm_img = y[0:3]
+    stress1_img = y[3:6]
+    stress2_img = y[6:9]
+    displacement_img = y[9:12]
+    area_shear_img = y[12:15]
+    
+    # convert to numpy
+    cnorm_img = cnorm_img.permute(1, 2, 0).numpy()
+    stress1_img = stress1_img.permute(1, 2, 0).numpy()
+    stress2_img = stress2_img.permute(1, 2, 0).numpy()
+    displacement_img = displacement_img.permute(1, 2, 0).numpy()
+    area_shear_img = area_shear_img.permute(1, 2, 0).numpy()
+    
+    
+    # visualize the images
+    fig, ax = plt.subplots(2, 3, figsize=(12, 8))
+    ax[0, 0].imshow(deformed_img_norm)
+    ax[0, 0].set_title("Deformed Image")
+    ax[0, 1].imshow(undeformed_img_norm)
+    ax[0, 1].set_title("Undeformed Image")
+    
+    ax[0, 2].imshow(image_diff, cmap='gray')
+    ax[0, 2].set_title("Image Difference")
+    
+    # show one channel 
+    ax[1, 0].imshow(cnorm_img[:,:,0])
+    ax[1, 0].set_title("CNORM Image")
+    
+    ax[1, 1].imshow(stress1_img[:,:,0])
+    ax[1, 1].set_title("Stress1 Image")
+    
+    ax[1, 2].imshow(displacement_img[:,:,0])
+    ax[1, 2].set_title("Displacement Image")
+    plt.show()
