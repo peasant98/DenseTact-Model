@@ -76,8 +76,22 @@ def write_data(file_path, data, is_X = True, bounds_dict=None):
             json.dump(bounds_dict, f, indent=4)
         
 class FullDataset(Dataset):
-    def __init__(self,  transform=None, samples_dir='../Documents/Dataset/sim_dataset', output_type='depth', root_dir='../Documents/Dataset/data_v2',
+    def __init__(self,  transform=None, 
+                 samples_dir='../Documents/Dataset/sim_dataset', 
+                 output_type='depth', 
+                 root_dir=None,
                  is_real_world=False):
+        """
+        Dataset for DenseTact Calibration task
+
+        Args:
+            transform (torchvision.transforms.Compose): Transform to apply to the data
+            samples_dir (str): path to the processed dataset
+            output_type (str): Type of output to get from the dataset
+            root_dir (str) Optional: Root directory of the original dataset, 
+                    This argument is only needed when pre-processing the data
+            is_real_world (bool): Flag to indicate if it is real world data
+        """
         self.samples_dir = samples_dir
         self.root_dir = root_dir
         self.transform = transform

@@ -268,6 +268,7 @@ class LightningDTModel(L.LightningModule):
             # ax.set_xlabel("Threshold")
             # ax.set_ylabel("Error Rate")
             # self.logger.experiment.add_figure(f"{name}/Rel Error Curve", fig, self.global_step)
+            # fig.clf()
 
             # # draw the plot of the abs error curve
             # abs_interval = self.cfg.metric.TF_abs_error_thresh / num_bins
@@ -351,6 +352,7 @@ if __name__ == '__main__':
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/dt_vit.yaml")
+    arg.add_argument('--dataset_dir', type=str, default="../Documents/Dataset/sim_dataset")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
     opt = arg.parse_args()
@@ -371,7 +373,7 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
     
-    dataset = FullDataset(transform=transform, output_type=cfg.dataset.output_type)
+    dataset = FullDataset(transform=transform, samples_dir=opt.dataset_dir, output_type=cfg.dataset.output_type)
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
 
