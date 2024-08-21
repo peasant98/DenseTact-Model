@@ -94,6 +94,15 @@ class LightningDTModel(L.LightningModule):
                 self.logger.experiment.add_image('gt/deform_color', gt_deform_color, self.global_step)
                 self.logger.experiment.add_image('gt/undeform_color', gt_undeform_color, self.global_step)
                 self.logger.experiment.add_image('gt/diff_color', gt_diff_color, self.global_step)
+                
+                # visualize the prediction and Y
+                pred_depth = pred[0].detach().clone()
+                pred_depth = pred_depth.cpu().numpy()
+                gt_depth = Y[0].detach().clone()
+                gt_depth = gt_depth.cpu().numpy()
+
+                self.logger.experiment.add_image('train/pred_depth', pred_depth, self.global_step)
+                self.logger.experiment.add_image('train/gt_depth', gt_depth, self.global_step)
         
         return {"loss": loss}
 
