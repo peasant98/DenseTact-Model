@@ -205,7 +205,7 @@ class ResnetEncoder(nn.Module):
 class DensenetEncoder(nn.Module):
     def __init__(self, cfg):
         super(DensenetEncoder, self).__init__()
-        self.encoder = getattr(models, cfg.model.backbone)(pretrained=True)
+        self.encoder = getattr(models, cfg.model.backbone)(pretrained=cfg.model.imagenet_pretrained)
         self.feature_channels = [ self.encoder.classifier.in_features,
                                 self.encoder.features.denseblock4.denselayer1.norm1.num_features,
                                 self.encoder.features.denseblock3.denselayer1.norm1.num_features, 
