@@ -4,7 +4,7 @@ from yacs.config import CfgNode as CN
 cfg = CN()
 
 cfg.epochs = 100
-cfg.batch_size = 32
+cfg.batch_size = 16
 cfg.num_workers = 16
 cfg.dataset_ratio = 1.
 # seed for every thing
@@ -24,6 +24,7 @@ cfg.model.encoder = 'vitl'
 cfg.model.out_chans = 15
 cfg.model.loss = "L1"
 cfg.model.backbone = ""
+cfg.model.imagenet_pretrained = False
 
 cfg.model.cnn = CN()
 cfg.model.cnn.decoder_mid_dim = [1024, 1024, 512, 256, 64]

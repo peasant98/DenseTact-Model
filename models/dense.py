@@ -157,6 +157,8 @@ class FullDecoder(nn.Module):
         
         # no concatenation in the last layer
         self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1], decoder_output_dim[-1]))
+        # [Deprecated] Use the following line instead of the above line for old weights
+        # self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1])) # , decoder_output_dim[-1]))
         
         self.head = DecoderHead(decoder_output_dim[-1], output_channels)
         
@@ -173,7 +175,7 @@ class FullDecoder(nn.Module):
 class ResnetEncoder(nn.Module):
     def __init__(self, cfg):
         super(ResnetEncoder, self).__init__()
-        self.encoder = getattr(models, cfg.model.backbone)(pretrained=True)
+        self.encoder = getattr(models, cfg.model.backbone)(pretrained=cfg.model.imagenet_pretrained)
         last_feat_dim = self.encoder.fc.in_features
 
         self.encoder.conv1 = nn.Conv2d(cfg.model.in_chans, 64, kernel_size=7, stride=2, padding=3, bias=False)
@@ -247,6 +249,7 @@ class DTNet(nn.Module):
         if cfg.model.encoder == 'densenet':
             self.encoder = DensenetEncoder(cfg)
             # remove classifier layer
+            # [Deprecated] comment the following line for old weights
             del self.encoder.encoder.classifier
         # resnet series
         elif cfg.model.encoder in ['resnet', 'resnext']:
@@ -262,7 +265,7 @@ class DTNet(nn.Module):
         self.decoders = nn.ModuleList()
         # start with 1024 features in decoder
         out_chans = [cfg.model.out_chans] if isinstance(cfg.model.out_chans, int) else cfg.model.out_chans
-        self.decoder_features = 1024 + 512
+        self.decoder_features = 1024
         for head_output_channels in out_chans:
             # Decoder: Using a custom decoder
             self.decoders.append(FullDecoder(encoder_features, self.decoder_features, 

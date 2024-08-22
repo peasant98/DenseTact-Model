@@ -257,33 +257,33 @@ class LightningDTModel(L.LightningModule):
             interval = self.cfg.metric.TF_rel_error_rate / num_bins
             threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
 
-            fig = plt.figure()
-            ax = fig.add_subplot(111)
+            # fig = plt.figure()
+            # ax = fig.add_subplot(111)
 
-            # set x-y limit
-            ax.set_xlim([0, threshold_ratio[-1]])
-            ax.set_ylim([0, 1])
-            # draw the plot of the error curve
-            ax.plot(threshold_ratio, error_curve, label="Error Curve")
-            ax.set_xlabel("Threshold")
-            ax.set_ylabel("Error Rate")
-            self.logger.experiment.add_figure(f"{name}/Rel Error Curve", fig, self.global_step)
-            fig.clf()
+            # # set x-y limit
+            # ax.set_xlim([0, threshold_ratio[-1]])
+            # ax.set_ylim([0, 1])
+            # # draw the plot of the error curve
+            # ax.plot(threshold_ratio, error_curve, label="Error Curve")
+            # ax.set_xlabel("Threshold")
+            # ax.set_ylabel("Error Rate")
+            # self.logger.experiment.add_figure(f"{name}/Rel Error Curve", fig, self.global_step)
+            # fig.clf()
 
-            # draw the plot of the abs error curve
-            abs_interval = self.cfg.metric.TF_abs_error_thresh / num_bins
-            threshold_abs = [k * abs_interval for k in range(1, num_bins + 1)]
-            fig = plt.figure()
-            ax = fig.add_subplot(111)
+            # # draw the plot of the abs error curve
+            # abs_interval = self.cfg.metric.TF_abs_error_thresh / num_bins
+            # threshold_abs = [k * abs_interval for k in range(1, num_bins + 1)]
+            # fig = plt.figure()
+            # ax = fig.add_subplot(111)
 
-            # set x-y limit
-            ax.set_xlim([0, threshold_abs[-1]])
-            ax.set_ylim([0, 1])
-            # draw the plot of the error curve
-            ax.plot(threshold_abs, abs_error_curve, label="Abs Error Curve")
-            ax.set_xlabel("Threshold")
-            ax.set_ylabel("Error Rate")
-            self.logger.experiment.add_figure(f"{name}/Abs Error Curve", fig, self.global_step)
+            # # set x-y limit
+            # ax.set_xlim([0, threshold_abs[-1]])
+            # ax.set_ylim([0, 1])
+            # # draw the plot of the error curve
+            # ax.plot(threshold_abs, abs_error_curve, label="Abs Error Curve")
+            # ax.set_xlabel("Threshold")
+            # ax.set_ylabel("Error Rate")
+            # self.logger.experiment.add_figure(f"{name}/Abs Error Curve", fig, self.global_step)
 
         sync_data = AUC_abs * 100 if self.global_rank == 0 else 0
         if dist.is_initialized():
@@ -352,6 +352,7 @@ if __name__ == '__main__':
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/dt_vit.yaml")
+    arg.add_argument('--dataset_dir', type=str, default="../Documents/Dataset/sim_dataset")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
     opt = arg.parse_args()
@@ -372,7 +373,7 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
     
-    dataset = FullDataset(transform=transform, output_type=cfg.dataset.output_type)
+    dataset = FullDataset(transform=transform, samples_dir=opt.dataset_dir, output_type=cfg.dataset.output_type)
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
 
