@@ -1,9 +1,14 @@
 dataset_ratio: 1.0
+batch_size: 96
 
 model:
-  name: ViT
+  name: HieraDPT
   out_chans: 1
-  pretrained_model: "exp/MAE_ViT_Pretrain_75/checkpoints/last.ckpt"
+  pretrained_model: "exp/Hiera2_MAE/checkpoints/last.ckpt"
+
+  hiera:
+    use_bn: True
+    decoder_embed_dim: 512
 
 dataset:
   output_type: "depth"

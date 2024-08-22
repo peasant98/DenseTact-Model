@@ -1,4 +1,6 @@
 dataset_ratio: 1.0
+# 32 ~ 5 GB GPU
+batch_size: 96
 
 model:
   name: HieraDPT

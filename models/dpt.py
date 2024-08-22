@@ -17,7 +17,7 @@ from models.hiera_layers.hiera_utils import conv_nd
 def _make_fusion_block(features, use_bn, size=None):
     return FeatureFusionBlock(
         features,
-        nn.ReLU(False),
+        nn.LeakyReLU(),
         deconv=False,
         bn=use_bn,
         expand=False,
@@ -192,7 +192,7 @@ class HieraDPTHead(nn.Module):
                 PermuteLayer((0, 3, 1, 2)),
                 nn.Conv2d(
                     in_channels=in_chan,
-                    out_channels=out_channel,
+                    out_channels=features,
                     kernel_size=1,
                     stride=1,
                     padding=0,
@@ -200,9 +200,9 @@ class HieraDPTHead(nn.Module):
             ) for in_chan, out_channel in zip(in_channels, out_channels)
         ])
 
-        self.conv_rn = nn.ModuleList([
-            nn.Conv2d(out_channel, features, kernel_size=3, stride=1, padding=1, bias=False, groups=1) for out_channel in out_channels
-        ])
+        # self.conv_rn = nn.ModuleList([
+        #     nn.Conv2d(out_channel, features, kernel_size=3, stride=1, padding=1, bias=False, groups=1) for out_channel in out_channels
+        # ])
 
         self.refinement_blocks = nn.ModuleList([
             _make_fusion_block(features, use_bn) for _ in out_channels
@@ -217,7 +217,9 @@ class HieraDPTHead(nn.Module):
         self.output_conv1 = nn.Conv2d(head_features_1, head_features_1 // 2, kernel_size=3, stride=1, padding=1)
         self.output_conv2 = nn.Sequential(
             nn.Conv2d(head_features_1 // 2, head_features_2, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(True),
+            # maybe LeakyReLU here
+            nn.LeakyReLU(),
+            # nn.BatchNorm2d(head_features_2),
             nn.Conv2d(head_features_2, output_dim, kernel_size=1, stride=1, padding=0),
         )
 
@@ -225,7 +227,7 @@ class HieraDPTHead(nn.Module):
         out = []
         for i, x in enumerate(out_features):
             x = self.projects[i](x)
-            x = self.conv_rn[i](x)
+            # x = self.conv_rn[i](x)
             out.append(x)
 
         # fuse the feature hierarchically

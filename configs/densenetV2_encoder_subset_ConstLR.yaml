@@ -3,15 +3,15 @@ dataset_ratio: 0.4
 model:
   name: DenseNetV2
   out_chans: 1
-  encoder: "densenet"
-  backbone: "densenet161"
+  encoder: densenet
+  backbone: densenet161
 
 dataset:
-  output_type: "depth"
+  output_type: depth
 
 optimizer:
   name: AdamW
 
 scheduler:
-  name: "none"
+  name: none
   
