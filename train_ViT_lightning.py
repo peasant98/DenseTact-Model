@@ -75,7 +75,7 @@ class LightningDTModel(L.LightningModule):
         N, C, H, W = X.shape 
         
         pred = self.model(X) 
-        loss = self.criterion(pred, Y)
+        loss = self.criterion(pred, Y * self.cfg.scale)
 
         # outputs = torch.cat(outputs, dim=1)
         self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
@@ -187,7 +187,7 @@ class LightningDTModel(L.LightningModule):
         X, Y = batch 
         N, C, H, W = X.shape 
         
-        pred = self.model(X) 
+        pred = self.model(X) / self.cfg.scale
         mse = self.mse(pred, Y)
 
         # outputs = torch.cat(outputs, dim=1)

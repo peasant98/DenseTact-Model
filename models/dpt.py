@@ -14,10 +14,10 @@ from models.hiera_layers.hiera import Hiera, HieraBlock
 from models.hiera_layers.hiera_utils import conv_nd
 
 
-def _make_fusion_block(features, use_bn, size=None):
+def _make_fusion_block(features, use_bn, size=None, activation=nn.ReLU()):
     return FeatureFusionBlock(
         features,
-        nn.LeakyReLU(),
+        activation,
         deconv=False,
         bn=use_bn,
         expand=False,
@@ -170,7 +170,8 @@ class HieraDPTHead(nn.Module):
                 in_channels,
                 out_channels,
                 output_dim,
-                use_bn=False, 
+                use_bn=False,
+                activation:str = "relu"
                 ):
         """
             Args:
@@ -179,11 +180,18 @@ class HieraDPTHead(nn.Module):
                 out_channels: list, number of output channels
                 output_dim: int, output dimension of the model
                 use_bn: bool, use batch normalization
+                activation name: str, activation function name eg. relu, leaky_relu
         """
         super().__init__()
 
         n_layers = len(in_channels)
         assert n_layers == len(out_channels), "Number of input and output channels must be the same"
+
+        self.activation_name = activation
+        if self.activation_name == "relu":
+            self.activation = nn.ReLU()
+        elif self.activation_name == "leaky_relu":
+            self.activation = nn.LeakyReLU()
 
         # head to project features
         self.projects = nn.ModuleList([
@@ -197,7 +205,7 @@ class HieraDPTHead(nn.Module):
                     stride=1,
                     padding=0,
                 )
-            ) for in_chan, out_channel in zip(in_channels, out_channels)
+            ) for in_chan in in_channels
         ])
 
         # self.conv_rn = nn.ModuleList([
@@ -205,7 +213,7 @@ class HieraDPTHead(nn.Module):
         # ])
 
         self.refinement_blocks = nn.ModuleList([
-            _make_fusion_block(features, use_bn) for _ in out_channels
+            _make_fusion_block(features, use_bn, activation=self.activation) for _ in out_channels
         ])
 
         # remove the resConf in the last block, since we don't need it
@@ -218,10 +226,24 @@ class HieraDPTHead(nn.Module):
         self.output_conv2 = nn.Sequential(
             nn.Conv2d(head_features_1 // 2, head_features_2, kernel_size=3, stride=1, padding=1),
             # maybe LeakyReLU here
-            nn.LeakyReLU(),
+            self.activation,
             # nn.BatchNorm2d(head_features_2),
             nn.Conv2d(head_features_2, output_dim, kernel_size=1, stride=1, padding=0),
         )
+
+        self.apply(self.init_weights)
+    
+    @torch.no_grad()
+    def init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity=self.activation_name)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity=self.activation_name)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, out_features):
         out = []
@@ -465,7 +487,7 @@ class HieraDPT(nn.Module):
         if cfg.model.hiera.decoder == "DPT":
             self.decoder = HieraDPTHead(cfg.model.hiera.decoder_embed_dim, 
                                         encoder_channels, out_channels=cfg.model.hiera.decoder_mapping_channels, 
-                                        output_dim=out_dims, use_bn=cfg.model.hiera.use_bn)
+                                        output_dim=out_dims, use_bn=cfg.model.hiera.use_bn, activation=cfg.model.hiera.activation)
        
         elif cfg.model.hiera.decoder == "Vanilla":
 

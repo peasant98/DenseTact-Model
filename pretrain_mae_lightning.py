@@ -120,6 +120,7 @@ class LightningDTModel(L.LightningModule):
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
+    arg.add_argument('--dataset_dir', type=str, default="./output")
     arg.add_argument('--epochs', type=int, default=150)
     arg.add_argument('--gpus', type=int, default=1)
     arg.add_argument('--model', type=str, default="hiera", help="Model Architectire, choose either hiera or vit")
@@ -137,13 +138,13 @@ if __name__ == '__main__':
         transforms.Resize((256, 256), antialias=True),
     ])
     
-    dataset = FullDataset(transform=transform, output_type='none')
+    dataset = FullDataset(transform=transform, output_type='none', samples_dir=opt.dataset_dir)
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
 
     # take only 10 percent of dataset for train and test
     dataset_length = int(opt.dataset_ratio * full_dataset_length)
-    train_size = int(0.8 * dataset_length)
+    train_size = int(0.95 * dataset_length)
     test_size = dataset_length - train_size
     
     train_dataset, test_dataset, _ = random_split(dataset, [train_size, test_size, full_dataset_length - dataset_length])

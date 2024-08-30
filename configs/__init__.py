@@ -10,6 +10,7 @@ cfg.dataset_ratio = 1.
 # seed for every thing
 # include dataset split
 cfg.seed = 42
+cfg.scale = 1.
 
 cfg.gradient_clip_val = None
 cfg.gradient_clip_algorithm = None
@@ -43,10 +44,11 @@ cfg.model.hiera.mlp_ratio = 4.0
 cfg.model.hiera.decoder = "DPT"
 # for DPT Decoder Head
 cfg.model.hiera.use_bn = False
+cfg.model.hiera.activation = "leaky_relu"
 cfg.model.hiera.decoder_embed_dim = 256
 cfg.model.hiera.decoder_mapping_channels = [256, 512, 1024]
 
-# for Vanilla model
+# for Vanilla model (decoder = "Vanilla")
 cfg.model.hiera.decoder_num_heads = 1
 cfg.model.hiera.decoder_depth = 3
 

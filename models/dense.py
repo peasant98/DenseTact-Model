@@ -103,6 +103,20 @@ class DecoderBlock(nn.Module):
                 nn.BatchNorm2d(out_channels),
                 nn.ReLU(inplace=True)
             )
+
+        self.apply(self.init_weights)
+    
+    @torch.no_grad()
+    def init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
         
     def forward(self, x, skip=None):
         x = self.upsample(x)
@@ -156,9 +170,9 @@ class FullDecoder(nn.Module):
                                              decoder_output_dim[i - 1]))
         
         # no concatenation in the last layer
-        self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1], decoder_output_dim[-1]))
+        # self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1], decoder_output_dim[-1]))
         # [Deprecated] Use the following line instead of the above line for old weights
-        # self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1])) # , decoder_output_dim[-1]))
+        self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1])) # , decoder_output_dim[-1]))
         
         self.head = DecoderHead(decoder_output_dim[-1], output_channels)
         
