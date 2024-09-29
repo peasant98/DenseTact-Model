@@ -97,7 +97,7 @@ class FullDataset(Dataset):
         self.transform = transform
         self.output_type = output_type
 
-        assert output_type in ['none', 'depth', 'full'], "Output type must be one of 'none', 'depth', 'full'"
+        assert output_type in ['none', 'depth', 'depth_stress', 'full'], "Output type must be one of 'none', 'depth', 'full'"
         self.is_real_world = is_real_world
         
         if self.is_real_world:
@@ -402,6 +402,28 @@ class FullDataset(Dataset):
             relative_depth = relative_depth - 1 
             y = relative_depth
 
+            # apply transform
+            y = self.transform(y).float()
+
+        # read only depth images
+        if self.output_type == 'depth_stress':
+            relative_depth = cv2.imread(f'{self.samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
+            relative_depth = relative_depth / 10000.0
+            relative_depth = relative_depth - 1 
+            
+            # load bounds json
+            with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
+                bounds = json.load(f)
+            
+            stress2_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress2.png')
+            stress2_img = cv2.cvtColor(stress2_img, cv2.COLOR_BGR2RGB)
+            x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['S12']['max_val_r'] - bounds['S12']['min_val_r'])) + bounds['S12']['min_val_r']
+            x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['S12']['max_val_g'] - bounds['S12']['min_val_g'])) + bounds['S12']['min_val_g']
+            x3 = ((stress2_img[:,:,2] / 255.0) * (bounds['S12']['max_val_b'] - bounds['S12']['min_val_b'])) + bounds['S12']['min_val_b']
+            stress2 = np.stack([x1, x2, x3], axis=2)
+            stress2 = stress2 * self.output_mask[:, :, np.newaxis]
+            
+            y = np.concatenate([relative_depth[:, :, None], stress2], axis=2)
             # apply transform
             y = self.transform(y).float()
 

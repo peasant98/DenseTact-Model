@@ -30,6 +30,8 @@ from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
 class LightningDTModel(L.LightningModule):
+    OUTPUT_ORDER = ["depth", "stress_x", "stress_y", "stress_z"]
+    
     def __init__(self, cfg):
         """ MAE Model for training on the DT dataset """
         super(LightningDTModel, self).__init__()
@@ -44,6 +46,8 @@ class LightningDTModel(L.LightningModule):
             self.criterion = nn.MSELoss()
         else:
             raise NotImplementedError("Loss not implemented {}".format(cfg.model.loss))
+        
+        self.output_names = self.OUTPUT_ORDER[:self.cfg.model.out_chans]
         
         # MSE for validation
         self.mse = nn.MSELoss()
@@ -72,6 +76,10 @@ class LightningDTModel(L.LightningModule):
     def training_step(self, batch, batch_idx):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
         X, Y = batch 
+        
+        # # force Negative samples to be 0
+        # Y = torch.where(torch.abs(Y) < self.cfg.metric.PN_thresh, torch.zeros_like(Y), Y)
+        
         N, C, H, W = X.shape 
         
         pred = self.model(X) 
@@ -102,19 +110,28 @@ class LightningDTModel(L.LightningModule):
         self.validation_stats = {
             "mse": [],
         }
-
-        self.validation_stats["depth"] = dict(NegativeNum=0, FNNum=0, PosNum=0, error_cureve=np.zeros(11), abs_error_curve=np.zeros(11))
+        
+        for name in self.output_names:
+            self.validation_stats[name] = dict(NegativeNum=0, FNNum=0, PosNum=0, error_cureve=np.zeros(11), abs_error_curve=np.zeros(11))
     
     def on_validation_epoch_start(self):
         self.reset_validation_stats()
 
     @torch.no_grad()
-    def compute_metric(self, prediction:torch.Tensor, label:torch.Tensor):
+    def compute_metric(self, prediction:torch.Tensor, 
+                       label:torch.Tensor,
+                       PN_thresh:float=1e-6,
+                       TF_rel_error_rate:float=0.1,
+                       TF_abs_error_thresh:float=1e-3):
         """ Compute the prediction metric 
         
         Args:
             prediction: (N, C, H, W)
             label: (N, C, H, W)
+            
+            PN_thresh: threshold for negative samples
+            TF_rel_error_rate: threshold for relative error
+            TF_abs_error_thresh: threshold for absolute error
 
         Returns:
             dict: dictionary of metrics
@@ -131,15 +148,15 @@ class LightningDTModel(L.LightningModule):
 
         num_pixels = label_flatten.shape[0]
         num_bins = self.cfg.metric.num_bins
-        interval = self.cfg.metric.TF_rel_error_rate / num_bins
+        interval = TF_rel_error_rate / num_bins
         threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
         # normally set TF_abs_error_thresh to 1e-3 (=1mm)
-        abs_interval = self.cfg.metric.TF_abs_error_thresh / num_bins
+        abs_interval = TF_abs_error_thresh / num_bins
         threshold_abs = [k * abs_interval for k in range(1, num_bins + 1)]
 
         # Here, negative samples are the pixels with value than 1e-6
         # positive samples are the pixels with value greater than 1e-6
-        eps = self.cfg.metric.PN_thresh
+        eps = PN_thresh
 
         # compute the negative pixels
         Neg_mask = torch.abs(label_flatten) < eps
@@ -164,7 +181,7 @@ class LightningDTModel(L.LightningModule):
             for ratio in threshold_ratio:
                 error_curve.append(torch.sum(rel_error < ratio).item())
 
-            error_curve.append(torch.sum(rel_error > self.cfg.metric.TF_rel_error_rate).item())
+            error_curve.append(torch.sum(rel_error > TF_rel_error_rate).item())
             error_curve = np.array(error_curve)
 
             # compute abs error
@@ -173,7 +190,7 @@ class LightningDTModel(L.LightningModule):
             for thresh in threshold_abs:
                 abs_error_curve.append(torch.sum(abs_error < thresh).item())
 
-            abs_error_curve.append(torch.sum(abs_error > self.cfg.metric.TF_abs_error_thresh).item())
+            abs_error_curve.append(torch.sum(abs_error > TF_abs_error_thresh).item())
             abs_error_curve = np.array(abs_error_curve)
         
         return dict(NegativeNum=NegativeNum, FNNum=FNNum, PosNum=PosNum, error_cureve=error_curve, abs_error_curve=abs_error_curve)
@@ -181,6 +198,14 @@ class LightningDTModel(L.LightningModule):
     def update_metric(self, cumulative_metric_dict:dict, current_step_dict:dict):
         for key, item in current_step_dict.items():
             cumulative_metric_dict[key] += item
+            
+    def _process_prediction(self, prediction:torch.Tensor) -> dict:
+        """ Process the prediction and label for computing the metric """
+        output = dict()
+        for idx in range(len(self.output_names)):
+            output[self.output_names[idx]] = prediction[:, idx, :, :]
+        
+        return output
 
     def _run_val_test_step(self, batch, batch_idx, name="val"):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
@@ -194,8 +219,15 @@ class LightningDTModel(L.LightningModule):
         self.log(f'{name}/mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         self.validation_stats["mse"].append(mse.item())
 
-        depth_metric_dict = self.compute_metric(pred[:, 0, :, :], Y[:, 0, :, :])
-        self.update_metric(self.validation_stats["depth"], depth_metric_dict)
+        predict_dict, label_dict = self._process_prediction(pred), self._process_prediction(Y)
+
+        # compute force metric
+        for name in self.output_names:
+            metric_dict = self.compute_metric(predict_dict[name], label_dict[name],
+                                                     PN_thresh=self.cfg.metric.PN_thresh,
+                                                     TF_rel_error_rate=self.cfg.metric.TF_rel_error_rate,
+                                                     TF_abs_error_thresh=self.cfg.metric.TF_abs_error_thresh)
+            self.update_metric(self.validation_stats[name], metric_dict)
 
     def validation_step(self, batch, batch_idx):
         self._run_val_test_step(batch, batch_idx, name="val")
@@ -226,69 +258,76 @@ class LightningDTModel(L.LightningModule):
                             self.validation_stats[key] += stats[key]
         
         # compute the metric in the rank = 0
+        depth_AUC_abs = 0.
         if self.global_rank == 0:
-            FNR = self.validation_stats["depth"]["FNNum"] / self.validation_stats["depth"]["NegativeNum"]
+            for item in self.output_names:
+                
+                FNR = self.validation_stats[item]["FNNum"] / self.validation_stats[item]["NegativeNum"]
 
-            # here FPR is defined as the rel error > 100 %
-            FPR_rel = self.validation_stats["depth"]["error_cureve"][-1] / self.validation_stats["depth"]["PosNum"]
+                # here FPR is defined as the rel error > 100 %
+                FPR_rel = self.validation_stats[item]["error_cureve"][-1] / self.validation_stats[item]["PosNum"]
 
-            # here FPR is defined as the abs error > TF_abs_error_thresh
-            FPR_abs = self.validation_stats["depth"]["abs_error_curve"][-1] / self.validation_stats["depth"]["PosNum"]
+                # here FPR is defined as the abs error > TF_abs_error_thresh
+                FPR_abs = self.validation_stats[item]["abs_error_curve"][-1] / self.validation_stats[item]["PosNum"]
 
-            # log
-            self.log(f'{name}/FNR', FNR, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            self.log(f'{name}/FPR_rel', FPR_rel, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            self.log(f'{name}/FPR_abs', FPR_abs, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                # log
+                self.log(f'{name}/{item}/FNR', FNR, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                self.log(f'{name}/{item}/FPR_rel', FPR_rel, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                self.log(f'{name}/{item}/FPR_abs', FPR_abs, on_step=False, on_epoch=True, prog_bar=True, logger=True)
 
-            # draw the curve
-            error_curve = self.validation_stats["depth"]["error_cureve"][:-1] / self.validation_stats["depth"]["PosNum"]
-            # compute the Area under curve
-            AUC_rel = np.mean(error_curve)
-            self.log(f'{name}/AUC_rel', AUC_rel, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            
-            abs_error_curve = self.validation_stats["depth"]["abs_error_curve"][:-1] / self.validation_stats["depth"]["PosNum"]
-            AUC_abs = np.mean(abs_error_curve)
-            self.log(f'{name}/AUC_abs', AUC_abs, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            
-            # for ckpt name
-            # self.log('AUC', AUC_abs * 100, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-            
-            # disable plotting when training in DDP
-            if not dist.is_initialized():
+                # draw the curve
+                error_curve = self.validation_stats[item]["error_cureve"][:-1] / self.validation_stats[item]["PosNum"]
+                # compute the Area under curve
+                AUC_rel = np.mean(error_curve)
+                self.log(f'{name}/{item}/AUC_rel', AUC_rel, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                
+                abs_error_curve = self.validation_stats[item]["abs_error_curve"][:-1] / self.validation_stats[item]["PosNum"]
+                AUC_abs = np.mean(abs_error_curve)
+                self.log(f'{name}/{item}/AUC_abs', AUC_abs, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                
+                # select depth as final metric
+                if item == "depth":
+                    depth_AUC_abs = AUC_abs
+                
+                # for ckpt name
+                # self.log('AUC', AUC_abs * 100, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                
+                # disable plotting when training in DDP
+                if not dist.is_initialized():
 
-                num_bins = self.cfg.metric.num_bins
-                interval = self.cfg.metric.TF_rel_error_rate / num_bins
-                threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
+                    num_bins = self.cfg.metric.num_bins
+                    interval = self.cfg.metric.TF_rel_error_rate / num_bins
+                    threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
 
-                fig = plt.figure()
-                ax = fig.add_subplot(111)
+                    fig = plt.figure()
+                    ax = fig.add_subplot(111)
 
-                # set x-y limit
-                ax.set_xlim([0, threshold_ratio[-1]])
-                ax.set_ylim([0, 1])
-                # draw the plot of the error curve
-                ax.plot(threshold_ratio, error_curve, label="Error Curve")
-                ax.set_xlabel("Threshold")
-                ax.set_ylabel("Error Rate")
-                self.logger.experiment.add_figure(f"{name}/Rel Error Curve", fig, self.global_step)
-                fig.clf()
+                    # set x-y limit
+                    ax.set_xlim([0, threshold_ratio[-1]])
+                    ax.set_ylim([0, 1])
+                    # draw the plot of the error curve
+                    ax.plot(threshold_ratio, error_curve, label="Error Curve")
+                    ax.set_xlabel("Threshold")
+                    ax.set_ylabel("Error Rate")
+                    self.logger.experiment.add_figure(f"{name}/{item}/Rel Error Curve", fig, self.global_step)
+                    # fig.clf()
 
-                # draw the plot of the abs error curve
-                abs_interval = self.cfg.metric.TF_abs_error_thresh / num_bins
-                threshold_abs = [k * abs_interval for k in range(1, num_bins + 1)]
-                fig = plt.figure()
-                ax = fig.add_subplot(111)
+                    # draw the plot of the abs error curve
+                    abs_interval = self.cfg.metric.TF_abs_error_thresh / num_bins
+                    threshold_abs = [k * abs_interval for k in range(1, num_bins + 1)]
+                    fig = plt.figure()
+                    ax = fig.add_subplot(111)
 
-                # set x-y limit
-                ax.set_xlim([0, threshold_abs[-1]])
-                ax.set_ylim([0, 1])
-                # draw the plot of the error curve
-                ax.plot(threshold_abs, abs_error_curve, label="Abs Error Curve")
-                ax.set_xlabel("Threshold")
-                ax.set_ylabel("Error Rate")
-                self.logger.experiment.add_figure(f"{name}/Abs Error Curve", fig, self.global_step)
+                    # set x-y limit
+                    ax.set_xlim([0, threshold_abs[-1]])
+                    ax.set_ylim([0, 1])
+                    # draw the plot of the error curve
+                    ax.plot(threshold_abs, abs_error_curve, label="Abs Error Curve")
+                    ax.set_xlabel("Threshold")
+                    ax.set_ylabel("Error Rate")
+                    self.logger.experiment.add_figure(f"{name}/{item}/Abs Error Curve", fig, self.global_step)
 
-        sync_data = AUC_abs * 100 if self.global_rank == 0 else 0
+        sync_data = depth_AUC_abs * 100 if self.global_rank == 0 else 0
         if dist.is_initialized():
             # boardcast to all GPUS
             output = [None for _ in range(dist.get_world_size())]
