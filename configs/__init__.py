@@ -52,6 +52,7 @@ cfg.model.hiera.decoder_depth = 3
 
 cfg.dataset = CN()
 cfg.dataset.output_type = "depth"
+cfg.dataset.dataset_path = "data"
 
 cfg.optimizer = CN()
 cfg.optimizer.name = "Adam"

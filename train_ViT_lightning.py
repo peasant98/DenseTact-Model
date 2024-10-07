@@ -29,6 +29,13 @@ from models import build_model
 from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
+def apply_colormap(depth_map, cmap='viridis'):  
+    depth_map_normalized = (depth_map - np.min(depth_map)) / (np.max(depth_map) - np.min(depth_map) + 0.00001)  # Normalize to [0, 1]
+    colormap = plt.get_cmap(cmap)
+    depth_map_colored = colormap(depth_map_normalized)[:, :, :, :3]  # Get RGB values, ignore alpha channel
+    depth_map_colored = (depth_map_colored * 255).astype(np.uint8)  # Convert to 8-bit image
+    return depth_map_colored
+
 class LightningDTModel(L.LightningModule):
     def __init__(self, cfg):
         """ MAE Model for training on the DT dataset """
@@ -78,7 +85,7 @@ class LightningDTModel(L.LightningModule):
         loss = self.criterion(pred, Y)
 
         # outputs = torch.cat(outputs, dim=1)
-        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('train/loss', loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         with torch.no_grad():
         
@@ -96,13 +103,20 @@ class LightningDTModel(L.LightningModule):
                 self.logger.experiment.add_image('gt/diff_color', gt_diff_color, self.global_step)
                 
                 # visualize the prediction and Y
-                pred_depth = pred[0].detach().clone()
-                pred_depth = pred_depth.cpu().numpy()
-                gt_depth = Y[0].detach().clone()
-                gt_depth = gt_depth.cpu().numpy()
+                # pred_depth = pred[0].detach().clone()
+                # pred_depth = pred_depth.cpu().numpy()
+                # gt_depth = Y[0].detach().clone()
+                # gt_depth = gt_depth.cpu().numpy()
+                
+                # pred_depth_colored = apply_colormap(pred_depth)[0]
+                # gt_depth_colored = apply_colormap(gt_depth)[0]
 
-                self.logger.experiment.add_image('train/pred_depth', pred_depth, self.global_step)
-                self.logger.experiment.add_image('train/gt_depth', gt_depth, self.global_step)
+                # # Log colored images to TensorBoard
+                # self.logger.experiment.add_image('train/pred_depth_colored', pred_depth_colored, self.global_step, dataformats='HWC')
+                # self.logger.experiment.add_image('train/gt_depth_colored', gt_depth_colored, self.global_step, dataformats='HWC')
+
+                # self.logger.experiment.add_image('train/pred_depth', pred_depth, self.global_step)
+                # self.logger.experiment.add_image('train/gt_depth', gt_depth, self.global_step)
         
         return {"loss": loss}
 
@@ -196,8 +210,31 @@ class LightningDTModel(L.LightningModule):
         X, Y = batch 
         N, C, H, W = X.shape 
         
-        pred = self.model(X) 
+        pred = self.model(X)
+        pred = pred
+        Y = Y 
+        
         mse = self.mse(pred, Y)
+        
+        # visualize first y and pred
+        # if batch_idx % 100 == 0:
+            # for i in range(N):
+            #     gt_depth = Y[i].detach().clone()
+            #     gt_depth = gt_depth.cpu().numpy()
+            #     # remove first dimension
+            #     gt_depth = gt_depth[0]
+                
+            #     pred_depth = pred[i].detach().clone()
+            #     pred_depth = pred_depth.cpu().numpy()
+            #     pred_depth = pred_depth[0]
+                
+            #     # plot both
+            #     fig, ax = plt.subplots(1, 2)
+            #     ax[0].imshow(gt_depth)
+            #     ax[0].set_title("GT Depth")
+            #     ax[1].imshow(pred_depth)
+            #     ax[1].set_title("Pred Depth")
+            #     plt.show()
 
         # outputs = torch.cat(outputs, dim=1)
         self.log(f'{name}/mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
@@ -349,6 +386,7 @@ class LightningDTModel(L.LightningModule):
             scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_steps=cfg.scheduler.warmup, T_max=T_max, eta_min=cfg.optimizer.eta_min)
             opt_config["lr_scheduler"] = dict(scheduler=scheduler, interval="step")
         elif cfg.scheduler.name == "none":
+            print("no scheduler")
             pass
 
         return opt_config
@@ -356,12 +394,13 @@ class LightningDTModel(L.LightningModule):
 
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
-    arg.add_argument('--gpus', type=int, default=1)
+    arg.add_argument('--gpus', type=int, default=4)
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/dt_vit.yaml")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
+    arg.add_argument('--real_world', action='store_true')
     opt = arg.parse_args()
 
     # load config
@@ -380,13 +419,15 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
     
-    dataset = FullDataset(transform=transform, output_type=cfg.dataset.output_type)
+    
+    dataset = FullDataset(transform=transform, samples_dir=cfg.dataset.dataset_path,
+                          output_type=cfg.dataset.output_type, is_real_world=opt.real_world)
+    
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
 
-    # take only 10 percent of dataset for train and test
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
-    train_size = int(0.8 * dataset_length)
+    train_size = int(0.7 * dataset_length)
     test_size = dataset_length - train_size
     cfg.total_steps = train_size * cfg.epochs // (cfg.batch_size * opt.gpus)
     

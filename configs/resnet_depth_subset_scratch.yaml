@@ -1,4 +1,4 @@
-dataset_ratio: 0.3
+dataset_ratio: 1.0
 
 model:
   name: DenseNetV2

@@ -20,3 +20,8 @@ sim_dataset/
 real_dataset/
 real_world_data_v2/
 data_v2/
+
+
+real_world_data_exr/
+real_world_data_depth/
+real_world_depth/

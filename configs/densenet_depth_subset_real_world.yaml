@@ -1,4 +1,4 @@
-dataset_ratio: 1.0
+dataset_ratio: 0.8
 
 model:
   name: DenseNetV2
@@ -9,7 +9,10 @@ model:
 
 dataset:
   output_type: "depth"
-  dataset_path: "../DenseTact-Calibration-M/sim_dataset"
+  dataset_path: "real_world_depth"
 
 optimizer:
-  name: AdamW
+  name: Adam
+
+scheduler:
+  name: none

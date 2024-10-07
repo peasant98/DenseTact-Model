@@ -1,15 +1,15 @@
-dataset_ratio: 1.0
+dataset_ratio: 0.4
 
 model:
   name: DenseNetV2
-  out_chans: 1
+  out_chans: 6
   encoder: "densenet"
   backbone: "densenet161"
   imagenet_pretrained: True
 
 dataset:
-  output_type: "depth"
+  output_type: "full"
   dataset_path: "../DenseTact-Calibration-M/sim_dataset"
 
 optimizer:
-  name: AdamW
+  name: Adam
