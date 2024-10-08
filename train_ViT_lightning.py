@@ -47,7 +47,7 @@ class LightningDTModel(L.LightningModule):
         else:
             raise NotImplementedError("Loss not implemented {}".format(cfg.model.loss))
         
-        self.output_names = self.OUTPUT_ORDER[:self.cfg.model.out_chans]
+        self.output_names = self.OUTPUT_ORDER[:sum(self.cfg.model.out_chans)]
         
         # MSE for validation
         self.mse = nn.MSELoss()

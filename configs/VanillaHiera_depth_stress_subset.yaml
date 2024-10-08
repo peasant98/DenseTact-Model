@@ -4,7 +4,7 @@ scale: 1000.
 
 model:
   name: HieraDPT
-  out_chans: 1
+  out_chans: [1, 3]
   pretrained_model: "exp/Hiera2_MAE/checkpoints/last.ckpt"
 
   hiera:
@@ -14,7 +14,7 @@ model:
     decoder_depth: 8
 
 dataset:
-  output_type: "depth"
+  output_type: "depth_stress"
 
 optimizer:
   name: AdamW

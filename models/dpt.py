@@ -398,6 +398,99 @@ class VanillaHieraFusionDecoder(nn.Module):
         pred = pred.permute(0, 3, 1, 2)
         return pred
     
+class HieraQUpsampingDecoder(nn.Module):
+    def __init__(self,   
+                in_channels,
+                output_dim,
+                norm_layer = partial(nn.LayerNorm, 1e-6),
+                decoder_embed_dim = 256, 
+                decoder_depth = 3,
+                mlp_ratio = 4.0,
+                q_pool = 2,
+                mask_unit_size = (8, 8),
+                q_stride = 2,
+                patch_stride = (4, 4),
+                tokens_spatial_shape = (16, 16),
+                stage_ends = [2, 3, 16, 3],
+                decoder_num_heads = 4) -> None:
+        """ Vanilla Hiera Fusion Decoder """
+        super().__init__()
+
+        curr_mu_size = mask_unit_size
+        self.multi_scale_fusion_heads = nn.ModuleList()
+
+        mask_unit_spatial_shape_final = [
+            i // s ** (q_pool) for i, s in zip(mask_unit_size, q_stride)
+        ]
+
+        tokens_spatial_shape_final = [
+            i // s ** (q_pool)
+            for i, s in zip(tokens_spatial_shape, q_stride)
+        ]
+
+        for idx, i in enumerate(stage_ends[:q_pool]):  # resolution constant after q_pool
+            kernel = [
+                i // s for i, s in zip(curr_mu_size, mask_unit_spatial_shape_final)
+            ]
+            curr_mu_size = [i // s for i, s in zip(curr_mu_size, q_stride)]
+            self.multi_scale_fusion_heads.append(
+                conv_nd(len(q_stride))(
+                    in_channels[idx],
+                    in_channels[-1],
+                    kernel_size=kernel,
+                    stride=kernel,
+                )
+            )
+
+        self.multi_scale_fusion_heads.append(nn.Identity())  # final stage, no transform
+        self.fusion_norm = norm_layer(in_channels[-1])
+
+        # --------------------------------------------------------------------------
+        # MAE decoder specifics
+        self.decoder_embed = nn.Linear(in_channels[-1], decoder_embed_dim)
+
+        self.decoder_pos_embed = nn.Parameter(
+            torch.zeros(
+                1, math.prod(tokens_spatial_shape_final), decoder_embed_dim
+            )
+        )
+
+        self.decoder_blocks = nn.ModuleList(
+            [
+                HieraBlock(
+                    dim=decoder_embed_dim,
+                    dim_out=decoder_embed_dim,
+                    heads=decoder_num_heads,
+                    norm_layer=norm_layer,
+                    mlp_ratio=mlp_ratio,
+                )
+                for i in range(decoder_depth)
+            ]
+        )
+        self.decoder_norm = norm_layer(decoder_embed_dim)
+
+        self.pred_stride = patch_stride[-1] * (
+            q_stride[-1] ** q_pool
+        )  # patch stride of prediction
+
+        self.decoder_pred = nn.Linear(
+            decoder_embed_dim,
+            (self.pred_stride ** min(2, len(q_stride))) * output_dim,
+        )  # predictor
+        # --------------------------------------------------------------------------
+
+        self.output_dim = output_dim
+
+        # TODO Initialize weights
+        
+    def forward(self, intermediates):
+        # Multi-scale fusion
+        x = 0.0
+        for head, interm_x in zip(self.multi_scale_fusion_heads, intermediates):
+            # since output is in spatial format, forward conv layer to fuse
+            interm_x = interm_x.permute(0, 3, 1, 2)
+            x += head(interm_x)
+    
 
 class DPTV2Net(nn.Module):
     def __init__(
@@ -461,6 +554,8 @@ class HieraDPT(nn.Module):
 
         in_chans = cfg.model.in_chans
         out_dims = cfg.model.out_chans
+        if isinstance(out_dims, int):
+            out_dims = [out_dims]
         norm_layer = partial(nn.LayerNorm, eps=1e-6)
 
         encoder_kwargs = dict(
@@ -502,9 +597,11 @@ class HieraDPT(nn.Module):
                 stage_ends = self.encoder.stage_ends,
                 tokens_spatial_shape = self.encoder.tokens_spatial_shape,
                 decoder_depth=cfg.model.hiera.decoder_depth)
-
-            self.decoder = VanillaHieraFusionDecoder(encoder_channels, output_dim=out_dims, norm_layer=norm_layer, 
-                                                     **decoder_kwargs)
+            
+            self.decoder_head = nn.ModuleList([
+                VanillaHieraFusionDecoder(encoder_channels, output_dim=out_dim, norm_layer=norm_layer, **decoder_kwargs)
+                for out_dim in out_dims
+            ])
         
 
     def forward(self, x):
@@ -512,9 +609,12 @@ class HieraDPT(nn.Module):
         intermediates = intermediates[: self.encoder.q_pool] + intermediates[-1:]
 
         # predictions
-        depth = self.decoder(intermediates)
+        preds = []
+        for decoder in self.decoder_head:
+            preds.append(decoder(intermediates))
 
-        return depth    
+        preds = torch.cat(preds, dim=1)
+        return preds    
 
     def freeze_encoder(self):
         self.encoder.eval()

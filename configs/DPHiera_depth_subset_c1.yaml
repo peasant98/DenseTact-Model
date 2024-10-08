@@ -1,4 +1,6 @@
 dataset_ratio: 0.4
+batch_size: 32
+scale: 1000.
 
 model:
   name: HieraDPT
@@ -14,7 +16,7 @@ dataset:
 
 optimizer:
   name: AdamW
-  lr: 0.0005
+  lr: 0.0004
 
 scheduler:
   name: linear_cosine

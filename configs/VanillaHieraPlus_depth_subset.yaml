@@ -5,9 +5,14 @@ scale: 1000.
 model:
   name: HieraDPT
   out_chans: 1
-  pretrained_model: "exp/Hiera2_MAE/checkpoints/last.ckpt"
+  pretrained_model: "exp/HieraPretrainSimBasePlus/checkpoints/last.ckpt"
 
   hiera:
+    embed_dim: 112
+    num_heads: 2
+    stages: [2, 3, 16, 3]
+    q_pool: 2
+    
     decoder: "Vanilla"
     decoder_embed_dim: 512
     decoder_num_heads: 16
