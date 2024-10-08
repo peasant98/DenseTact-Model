@@ -137,6 +137,9 @@ class FullDataset(Dataset):
         if not self.is_real_world:
             # get output mask to only worry about DT
             self.output_mask = self.get_output_mask()
+        else:
+            # 256 by 256 mask
+            self.output_mask = np.ones((512, 512))
         
         self.min = np.inf
         self.max = -np.inf
@@ -501,9 +504,9 @@ class FullDataset(Dataset):
             area_shear = area_shear * self.output_mask[:,:,np.newaxis]
             
             # data = (cnorm, stress1, stress2, displacement, area_shear)
-            data = (displacement, cnorm)
+            data = (displacement)
             
-            data = np.concatenate(data, axis=2)
+            # data = np.concatenate(data, axis=2)
             # data = 20 * data
             y = data
 
@@ -590,9 +593,9 @@ def crop_image(image, left, right, top, bottom):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Set dataset parameters dynamically')
-    parser.add_argument('--samples_dir', type=str, default='../DenseTact-Calibration-M/sim_dataset', help='Directory of the samples')
-    parser.add_argument('--root_dir', type=str, default='../DenseTact-Calibration-M/data_v2', help='Root directory of original dataset')
-    parser.add_argument('--is_real_world', type=bool, default=False, help='Flag to indicate if it is real world data')
+    parser.add_argument('--samples_dir', type=str, default='real_world_dataset', help='Directory of the samples')
+    parser.add_argument('--root_dir', type=str, default='../DenseTact-Calibration-M/real_world_data_v2', help='Root directory of original dataset')
+    parser.add_argument('--is_real_world', type=bool, default=True, help='Flag to indicate if it is real world data')
 
     args = parser.parse_args()
 
@@ -605,14 +608,14 @@ if __name__ == '__main__':
         transforms.Resize((256, 256), antialias=True),
     ])
     
-    combined_mae_dataset = CombinedMAEDataset(dir1='../DenseTact-Calibration-M/sim_dataset', dir2='real_world_depth', transform=transform)
+    # combined_mae_dataset = CombinedMAEDataset(dir1='../DenseTact-Calibration-M/real_dataset', dir2='real_world_depth', transform=transform)
     
-    X = combined_mae_dataset[10]
+    # X = combined_mae_dataset[10]
     
-    # plot image
-    X = X.permute(1, 2, 0).numpy()
-    plt.imshow(X)
-    plt.show()
+    # # plot image
+    # X = X.permute(1, 2, 0).numpy()
+    # plt.imshow(X)
+    # plt.show()
     
     
     dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
@@ -620,25 +623,21 @@ if __name__ == '__main__':
     full_max = 0
     full_min = 0
     
-    # dataset.construct_dataset()
+    dataset.construct_dataset()
     
     # use this line to construct the dataset if it has not been constructed
     # dataset.construct_dataset()
     # get random idxes
     # idxes = np.random.randint(0, len(dataset), 1000)
-    # # max = 0
-    # # min = 0
     # for i in (idxes):
     #     X, y = dataset[i]
-    # #     if y.max() > max:
-    # #         max = y.max()
-    # #     if y.min() < min:
-    # #         min = y.min()
-    # #     print(min, max)
-    # #     continue
+    #     # plot the second channel
+    #     y = y.permute(1, 2, 0).numpy()
     #     print(y.shape)
-            
-    #     # X is shape 7, 256, 256
+    #     # plot the 2nd channel of y
+    #     plt.imshow(y[:,:,1])
+    #     plt.show()
+
     #     deformed_img_norm = X[0:3]
     #     undeformed_img_norm = X[3:6]
     #     image_diff = X[6]
@@ -647,9 +646,6 @@ if __name__ == '__main__':
     #     deformed_img_norm = deformed_img_norm.permute(1, 2, 0).numpy()
     #     undeformed_img_norm = undeformed_img_norm.permute(1, 2, 0).numpy()
     #     image_diff = image_diff.numpy()
-        
-    #     y = y.permute(1, 2, 0).numpy()
-    #     relative_depth = y
         
     #     # plot images and diff
     #     fig, ax = plt.subplots(1, 3, figsize=(12, 8))

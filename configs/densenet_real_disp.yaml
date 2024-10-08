@@ -9,7 +9,10 @@ model:
 
 dataset:
   output_type: "full"
-  dataset_path: "../DenseTact-Calibration-M/sim_dataset"
+  dataset_path: "real_world_dataset"
 
 optimizer:
-  name: Adam
+  name: AdamW
+
+scheduler:
+  name: "none"
