@@ -103,20 +103,20 @@ class LightningDTModel(L.LightningModule):
                 self.logger.experiment.add_image('gt/diff_color', gt_diff_color, self.global_step)
                 
                 # visualize the prediction and Y
-                # pred_depth = pred[0].detach().clone()
-                # pred_depth = pred_depth.cpu().numpy()
-                # gt_depth = Y[0].detach().clone()
-                # gt_depth = gt_depth.cpu().numpy()
+                pred_depth = pred[0].detach().clone()
+                pred_depth = pred_depth.cpu().numpy()
+                gt_depth = Y[0].detach().clone()
+                gt_depth = gt_depth.cpu().numpy()
                 
-                # pred_depth_colored = apply_colormap(pred_depth)[0]
-                # gt_depth_colored = apply_colormap(gt_depth)[0]
+                pred_depth_colored = apply_colormap(pred_depth)[0]
+                gt_depth_colored = apply_colormap(gt_depth)[0]
 
-                # # Log colored images to TensorBoard
-                # self.logger.experiment.add_image('train/pred_depth_colored', pred_depth_colored, self.global_step, dataformats='HWC')
-                # self.logger.experiment.add_image('train/gt_depth_colored', gt_depth_colored, self.global_step, dataformats='HWC')
+                # Log colored images to TensorBoard
+                self.logger.experiment.add_image('train/pred_depth_colored', pred_depth_colored, self.global_step, dataformats='HWC')
+                self.logger.experiment.add_image('train/gt_depth_colored', gt_depth_colored, self.global_step, dataformats='HWC')
 
-                # self.logger.experiment.add_image('train/pred_depth', pred_depth, self.global_step)
-                # self.logger.experiment.add_image('train/gt_depth', gt_depth, self.global_step)
+                self.logger.experiment.add_image('train/pred_depth', pred_depth, self.global_step)
+                self.logger.experiment.add_image('train/gt_depth', gt_depth, self.global_step)
         
         return {"loss": loss}
 
@@ -468,7 +468,10 @@ if __name__ == '__main__':
     if opt.finetune:
         model_state = torch.load(opt.ckpt_path)
         calibration_model.load_state_dict(model_state["state_dict"])
+        calibration_model.model.decoders[0].head.conv1 = nn.Conv2d(64, cfg.model.out_chans, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
         opt.ckpt_path = None
+        # have model decoder match number of output channels
+        
     
     if opt.eval:
         trainer.test(model=calibration_model, dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)

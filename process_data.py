@@ -452,6 +452,8 @@ class FullDataset(Dataset):
             
             # apply transform
             y = self.transform(y).float()
+            
+            
 
         # read all labels
         elif self.output_type == 'full':  

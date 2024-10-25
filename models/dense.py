@@ -80,8 +80,6 @@ class DecoderHead(nn.Module):
         
     def forward(self, x):
         x = self.conv1(x)
-        x = 10 * self.tanh(x)
-        
         return x    
     
 class DecoderBlock(nn.Module):
