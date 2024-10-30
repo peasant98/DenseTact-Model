@@ -1,0 +1,18 @@
+dataset_ratio: 1.0
+
+model:
+  name: DenseNetV2
+  out_chans: 3
+  encoder: "densenet"
+  backbone: "densenet161"
+  imagenet_pretrained: True
+
+dataset:
+  output_type: "full"
+  dataset_path: "real_world_dataset"
+
+optimizer:
+  name: AdamW
+
+scheduler:
+  name: "none"

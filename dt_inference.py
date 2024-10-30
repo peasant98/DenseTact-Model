@@ -440,44 +440,15 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=12)
 
     calibration_model = LightningDTModel(cfg)
-
-    logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
     
-    # create callback to save checkpoints
-    checkpoint_callback = ModelCheckpoint(
-        monitor='AUC',
-        dirpath=osp.join(opt.exp_name, 'checkpoints/'),
-        filename='dt_model-{epoch:02d}-{AUC:.2f}',
-        save_top_k=3,
-        verbose=True,
-        save_last=True,
-        mode='max',
-    )
-
-    # log learning rate
-    lr_monitor = LearningRateMonitor(logging_interval='step')
-
-    # add callbacks
-    strategy = "ddp_find_unused_parameters_true" if opt.gpus > 1 else "auto"
-    callbacks = [checkpoint_callback, lr_monitor]
-    trainer = L.Trainer(max_epochs=cfg.epochs, callbacks=callbacks, logger=logger,
-                        accelerator="gpu", devices=opt.gpus, strategy=strategy,
-                        gradient_clip_val=cfg.gradient_clip_val, gradient_clip_algorithm=cfg.gradient_clip_algorithm)
+    # run inference on test dataset
+    # get random idxes
+    idxes = np.random.choice(len(test_dataset), 10)
+    test_samples = [test_dataset[i] for i in idxes]
+    for sample in test_samples:
+        pass
     
-    # only load states for finetuning
-    if opt.finetune:
-        model_state = torch.load(opt.ckpt_path)
-        calibration_model.model.decoders[0].head.conv1 = nn.Conv2d(64, 1, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        calibration_model.load_state_dict(model_state["state_dict"])
-        calibration_model.model.decoders[0].head.conv1 = nn.Conv2d(64, 3, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        opt.ckpt_path = None
-        # have model decoder match number of output channels
-        
+
     
     if opt.eval:
         trainer.test(model=calibration_model, dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)
-    else:
-        trainer.fit(model=calibration_model, train_dataloaders=dataloader, 
-                    ckpt_path=opt.ckpt_path, val_dataloaders=test_dataloader)
-        
-        trainer.test(model=calibration_model, dataloaders=test_dataloader)

@@ -114,7 +114,7 @@ class CombinedMAEDataset(Dataset):
         return image
         
 class FullDataset(Dataset):
-    def __init__(self, data_dir='output', transform=None, samples_dir='../DenseTact-Calibration-M/sim_dataset', output_type='depth', root_dir='../DenseTact-Calibration-M/data_v2',
+    def __init__(self, data_dir='output', transform=None, samples_dir='real_world_dataset', output_type='depth', root_dir='../DenseTact-Calibration-M/data_v2',
                  is_real_world=False):
         self.samples_dir = samples_dir
         self.root_dir = root_dir
@@ -506,7 +506,7 @@ class FullDataset(Dataset):
             area_shear = area_shear * self.output_mask[:,:,np.newaxis]
             
             # data = (cnorm, stress1, stress2, displacement, area_shear)
-            data = (displacement)
+            data = (area_shear)
             
             # data = np.concatenate(data, axis=2)
             # data = 20 * data
@@ -610,6 +610,7 @@ if __name__ == '__main__':
         transforms.Resize((256, 256), antialias=True),
     ])
     
+    
     # combined_mae_dataset = CombinedMAEDataset(dir1='../DenseTact-Calibration-M/real_dataset', dir2='real_world_depth', transform=transform)
     
     # X = combined_mae_dataset[10]
@@ -619,13 +620,23 @@ if __name__ == '__main__':
     # plt.imshow(X)
     # plt.show()
     
-    
     dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
                           root_dir=root_dir, is_real_world=is_real_world, output_type='full')
     full_max = 0
     full_min = 0
     
-    dataset.construct_dataset()
+    idxes = np.random.randint(0, len(dataset), 1000)
+    for i in (idxes):
+        X, y = dataset[i]
+        
+        # shape of y is 3 by 256 by 256
+        y = y.permute(1, 2, 0).numpy()
+        # only show the first channel
+        plt.imshow(y[:,:,0])
+        plt.show()
+    
+    
+    # dataset.construct_dataset()
     
     # use this line to construct the dataset if it has not been constructed
     # dataset.construct_dataset()
