@@ -80,8 +80,6 @@ class DecoderHead(nn.Module):
         
     def forward(self, x):
         x = self.conv1(x)
-        x = self.tanh(x)
-        
         return x    
     
 class DecoderBlock(nn.Module):
@@ -133,7 +131,6 @@ class DecoderBlock(nn.Module):
         """Resize the encoder features to match the dimensions of the decoder features."""
         return torch.nn.functional.interpolate(enc_ftrs, size=x.shape[2:], mode='bilinear', align_corners=False)
         
-
 class ResizeConv(nn.Module):
     def __init__(self, in_channels, decoder_channels):
         super(ResizeConv, self).__init__()
@@ -221,7 +218,7 @@ class ResnetEncoder(nn.Module):
 class DensenetEncoder(nn.Module):
     def __init__(self, cfg):
         super(DensenetEncoder, self).__init__()
-        self.encoder = getattr(models, cfg.model.backbone)(pretrained=True)
+        self.encoder = getattr(models, cfg.model.backbone)(pretrained=cfg.model.imagenet_pretrained)
         self.feature_channels = [ self.encoder.classifier.in_features,
                                 self.encoder.features.denseblock4.denselayer1.norm1.num_features,
                                 self.encoder.features.denseblock3.denselayer1.norm1.num_features, 
@@ -254,6 +251,61 @@ class DensenetEncoder(nn.Module):
         """ get feature channels from the encoder, from deep to shallow """
         return self.feature_channels
 
+class ResnextEncoder(nn.Module):
+    def __init__(self, cfg):
+        super(ResnextEncoder, self).__init__()
+        backbone_name = cfg.model.backbone  # e.g., 'resnext101_32x8d'
+        in_chans = cfg.model.in_chans       # Number of input channels
+        pretrained = cfg.model.imagenet_pretrained  # Boolean for pretrained weights
+        # Initialize the ResNeXt model
+        self.encoder = getattr(models, backbone_name)(pretrained=pretrained)
+        last_feat_dim = self.encoder.fc.in_features  # Feature dimension before the fully connected layer
+
+        # Modify the first convolutional layer if input channels are not equal to 3
+        if in_chans != 3:
+            self.encoder.conv1 = nn.Conv2d(
+                in_chans, 64, kernel_size=7, stride=2, padding=3, bias=False
+            )
+
+        # Remove the fully connected layer and the average pooling layer
+        self.encoder = nn.Sequential(*list(self.encoder.children())[:-2])
+
+        # Extract feature channels from different layers
+        self.feature_channels = [
+            last_feat_dim,  # Output channels from layer4
+            self.encoder[6][-1].conv3.out_channels,  # Output channels from layer2
+            self.encoder[5][-1].conv3.out_channels,  # Output channels from layer1
+            self.encoder[4][-1].conv3.out_channels,  # Output channels from layer1
+            self.encoder[1].num_features,            # Output channels after maxpool
+        ]
+
+    def forward(self, x):
+        
+        # Initial convolution and pooling layers
+        x = self.encoder[0](x)  # conv1
+        x1 = self.encoder[1](x)  # bn1
+        x = self.encoder[2](x1)  # relu
+        x1 = self.encoder[3](x1)  # maxpool
+
+        # Layer 1
+        x2 = self.encoder[4](x1)
+
+        # Layer 2
+        x3 = self.encoder[5](x2)
+
+        # Layer 3
+        x4 = self.encoder[6](x3)
+
+        # Layer 4
+        x5 = self.encoder[7](x4)
+
+        # Return features in reverse order (from deepest to shallowest)
+        return x1, x2, x3, x4, x5
+    
+    def get_feature_channels(self):
+        """ get feature channels from the encoder, from deep to shallow """
+        return self.feature_channels
+
 class DTNet(nn.Module):
     def __init__(self, cfg):
         super(DTNet, self).__init__()
@@ -266,14 +318,12 @@ class DTNet(nn.Module):
             # [Deprecated] comment the following line for old weights
             del self.encoder.encoder.classifier
         # resnet series
-        elif cfg.model.encoder in ['resnet', 'resnext']:
-            # default to resnet152
+        elif cfg.model.encoder == 'resnet':
             self.encoder = ResnetEncoder(cfg)
-            # remove the classifier layer
-            # this has been done in the __init__ function
+        elif cfg.model.encoder == 'resnext':
+            self.encoder = ResnextEncoder(cfg)
         else:
             raise NotImplementedError("Encoder not implemented {}".format(cfg.model.encoder))
-        
         encoder_features = self.encoder.get_feature_channels()
         
         self.decoders = nn.ModuleList()
@@ -285,7 +335,6 @@ class DTNet(nn.Module):
             self.decoders.append(FullDecoder(encoder_features, self.decoder_features, 
                                             cfg.model.cnn.decoder_mid_dim, cfg.model.cnn.decoder_output_dim,
                                             output_channels=head_output_channels))
-        
         
     def forward(self, x):
         # Densenet Encoder
@@ -307,10 +356,24 @@ class DTNet(nn.Module):
 if __name__ == "__main__":
     # Instantiate the model
     # sample usage with 1 heads and 1 output channels per head.
-    model = DTNet(n_heads=1, head_output_channels=1, encoder='densenet')
     
-    # swap encoder (resnet)
-    # model = DTNet(n_heads=1, head_output_channels=1, encoder='resnet')
+    class Config:
+        class Model:
+            encoder = 'resnext'
+            backbone = 'resnext101_32x8d'
+            imagenet_pretrained = True
+            in_chans = 7  # Change this if you have a different number of input channels
+            out_chans = 1
+            
+        class CNN:
+            decoder_mid_dim = [1024, 1024, 512, 256, 64]
+            decoder_output_dim = [1024, 512, 256, 128, 64]
+        model = Model()
+        model.cnn = CNN()
+    cfg = Config()
+    
+    model = DTNet(cfg)
+    
     
     # test input and output shape is desired
     dummy_input = torch.randn(1, 7, 256, 256)

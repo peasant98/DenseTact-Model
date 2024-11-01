@@ -60,86 +60,46 @@ def write_data(file_path, data, is_X = True, bounds_dict=None):
         cv2.imwrite(f'{file_path}/diff.png', image_diff)
         
     else:
-        cnorm_img, stress1_img, stress2_img, displacement_img, area_shear_img = data
-        
-        # save each to png
-        cv2.imwrite(f'{file_path}/cnorm.png', cnorm_img)
-        cv2.imwrite(f'{file_path}/stress1.png', stress1_img)
-        cv2.imwrite(f'{file_path}/stress2.png', stress2_img)
-        cv2.imwrite(f'{file_path}/displacement.png', displacement_img)
-        cv2.imwrite(f'{file_path}/area_shear.png', area_shear_img)
-        
-        # save bounds to json
-        with open(f'{file_path}/bounds.json', 'w') as f:
-            json.dump(bounds_dict, f, indent=4)
+        if bounds_dict is None:
+            # depth data
+            depth_img = data
+            depth_img = (depth_img).astype(np.uint16)
+            cv2.imwrite(f'{file_path}/depth.png', depth_img)
             
+            # read depth image
+            depth_img = cv2.imread(f'{file_path}/depth.png', cv2.IMREAD_ANYDEPTH)
+            depth_img = depth_img / 10000.0
+            depth_img = depth_img - 1
             
-class CombinedMAEDataset(Dataset):
-    """class for a combined dataset for Hiera/ViT pretraining."""
-    def __init__(self, dir1, dir2, transform=None):
-        """
-        Args:
-            dir1 (str): Path to the first image directory.
-            dir2 (str): Path to the second image directory.
-            transform (callable, optional): Optional transform to be applied
-                on a sample.
-        """
-        self.transform = transform
-        
-        # get list of directories in each dir
-        self.dirs1 = [os.path.join(dir1, d) for d in os.listdir(dir1) if os.path.isdir(os.path.join(dir1, d)) and 'X' in d]
-        self.dirs2 = [os.path.join(dir2, d) for d in os.listdir(dir2) if os.path.isdir(os.path.join(dir2, d)) and 'X' in d]
-
-        # Combine the lists
-        self.dir_paths = self.dirs1 + self.dirs2
-        
-        
-    def __len__(self):
-        """length of the dataset"""
-        return len(self.dir_paths)
-
-    def __getitem__(self, idx):
-        """gets an image for pretraining."""
-        # Get the image path
-        dir_path = self.dir_paths[idx]
-        img_path = f'{dir_path}/deformed.png'
-        
-        # Open the image
-        image = Image.open(img_path).convert('RGB')
-        
-        # Apply transformations if any
-        if self.transform:
-            image = self.transform(image)
-        
-        return image
+        else:
+            cnorm_img, stress1_img, stress2_img, displacement_img, area_shear_img = data
+            
+            # save each to png
+            cv2.imwrite(f'{file_path}/cnorm.png', cnorm_img)
+            cv2.imwrite(f'{file_path}/stress1.png', stress1_img)
+            cv2.imwrite(f'{file_path}/stress2.png', stress2_img)
+            cv2.imwrite(f'{file_path}/displacement.png', displacement_img)
+            cv2.imwrite(f'{file_path}/area_shear.png', area_shear_img)
+            
+            # save bounds to json
+            with open(f'{file_path}/bounds.json', 'w') as f:
+                json.dump(bounds_dict, f, indent=4)
         
 class FullDataset(Dataset):
-    def __init__(self,  transform=None, 
-                 samples_dir='../Documents/Dataset/sim_dataset', 
-                 output_type='depth', 
-                 root_dir=None,
+    def __init__(self, data_dir='output', transform=None, samples_dir='../DenseTact-Calibration-M/sim_dataset', output_type='depth', root_dir='../DenseTact-Calibration-M/data_v2',
                  is_real_world=False):
-        """
-        Dataset for DenseTact Calibration task
-
-        Args:
-            transform (torchvision.transforms.Compose): Transform to apply to the data
-            samples_dir (str): path to the processed dataset
-            output_type (str): Type of output to get from the dataset
-            root_dir (str) Optional: Root directory of the original dataset, 
-                    This argument is only needed when pre-processing the data
-            is_real_world (bool): Flag to indicate if it is real world data
-        """
+        
+        import pdb; pdb.set_trace()
         self.samples_dir = samples_dir
         self.root_dir = root_dir
-        self.transform = transform  
+        self.transform = transform
         self.output_type = output_type
 
-        assert output_type in ['none', 'depth', 'depth_stress', 'full'], "Output type must be one of 'none', 'depth', 'full'"
+        assert output_type in ['none', 'depth', 'full'], "Output type must be one of 'none', 'depth', 'full'"
         self.is_real_world = is_real_world
         
         if self.is_real_world:
-            # check if real_blender_info.json exists
+            # check if real_blender_info.json exists or output.json exists first
             if os.path.exists('output.json'):
                 self.blender_info = self.read_blender_info_json('output.json')
             else:
@@ -151,9 +111,6 @@ class FullDataset(Dataset):
         if not self.is_real_world:
             # get output mask to only worry about DT
             self.output_mask = self.get_output_mask()
-        else:
-            # 256 by 256 mask
-            self.output_mask = np.ones((512, 512))
         
         self.min = np.inf
         self.max = -np.inf
@@ -237,6 +194,8 @@ class FullDataset(Dataset):
         global MAX
         global MIN
         total_samples = 0
+        # shuffle self.blender_info
+        np.random.shuffle(self.blender_info)
         for item in tqdm(self.blender_info, desc="Processing Blender Info"):
             # go through each sequence of presses
             path = item['path']
@@ -260,6 +219,11 @@ class FullDataset(Dataset):
             else:
                 undeformed_img = center_crop(undeformed_img, 50)
             
+            # get undeformed depth image 
+            undeformed_depth_path = os.path.join(combined, f'img_1.npy')
+            undeformed_depth = np.load(undeformed_depth_path)
+            
+            
             if len(csv_files) == 1:
                 df = self.read_csv(os.path.join(combined, csv_files[0]))
                 # remove cases where field is a string with length of 0
@@ -277,23 +241,47 @@ class FullDataset(Dataset):
                 tasks = [(group, frame, combined, undeformed_img, self.transform) for frame, group in grouped]
                 for _ in tqdm(pool.imap_unordered(self.process_group, tasks), total=len(tasks), desc="Processing files in one press"):
                     pass
-
                 pool.close()
                 pool.join()
+                
             elif self.output_type == 'depth':
-                # no csv files and depth. 
                 print(f"Processing {combined}")
-                pool = Pool(processes=24)
+                pool = Pool(processes=16)
                 
                 png_files = [f for f in files if f.endswith('.png')]
-                
-                tasks = [(combined, undeformed_img, self.transform) for _ in range(1)]
-                
+                tasks = [(combined, undeformed_img, undeformed_depth, self.transform, png_file) for png_file in png_files]
                 for _ in tqdm(pool.imap_unordered(self.process_depth_group, tasks), total=len(tasks), desc="Processing files in one press"):
                     pass
                 
     def process_depth_group(self, args):
-        pass
+        global sample_id, sample_id_lock
+        
+        combined, undeformed_img, undeformed_depth, transform, png_file = args
+        # only get name of the file without file extension
+        name = os.path.splitext(png_file)[0]
+        depth_name = f'{name}.npy'
+        # read the depth image 
+        depth_image = np.load(os.path.join(combined, depth_name))
+        
+        # get num from name
+        frame = name.split('_')[-1]
+        X = self.construct_rgb(undeformed_img, frame, combined)
+        
+        # subtract depth_image from undeformed_depth
+        y = (undeformed_depth - depth_image) / 20
+        
+        y = y + 1
+        y = y * 10000
+
+        with sample_id_lock:
+            sample_id.value += 1
+            current_sample_id = sample_id.value
+            
+        os.makedirs(f'{self.samples_dir}/X{current_sample_id}', exist_ok=True)
+        os.makedirs(f'{self.samples_dir}/y{current_sample_id}', exist_ok=True)
+
+        write_data(f'{self.samples_dir}/X{current_sample_id}', X, is_X = True)
+        write_data(f'{self.samples_dir}/y{current_sample_id}', y, is_X = False)
     
     def process_group(self, args):
         global sample_id, sample_id_lock
@@ -349,8 +337,6 @@ class FullDataset(Dataset):
 
         write_data(f'{self.samples_dir}/X{current_sample_id}', X, is_X = True)
         write_data(f'{self.samples_dir}/y{current_sample_id}', y, is_X = False, bounds_dict=combined_dict)
-        # except Exception as e: 
-        #     print("Skipping because of error...", e)
         
     def construct_rgb(self, undeformed_img, frame, combined):
         """
@@ -369,19 +355,16 @@ class FullDataset(Dataset):
         deformed_img = self.read_image(deform_img_path)
         if self.is_real_world:
             deformed_img = crop_image(deformed_img, 165, 115, 25, 25)
-        
         else:
             deformed_img = center_crop(deformed_img, 50)
-        # undeformed_img = center_crop(undeformed_img, 90)
         
         # resize images to 512 by 512
         deformed_img = cv2.resize(deformed_img, (512, 512))
         undeformed_img = cv2.resize(undeformed_img, (512, 512))
         
-        # convert both to rgb
-        deformed_img = cv2.cvtColor(deformed_img, cv2.COLOR_BGR2RGB)
-        undeformed_img = cv2.cvtColor(undeformed_img, cv2.COLOR_BGR2RGB)
-
+        # rgb to bgr
+        deformed_img = cv2.cvtColor(deformed_img, cv2.COLOR_RGB2BGR)
+        undeformed_img = cv2.cvtColor(undeformed_img, cv2.COLOR_RGB2BGR)
             
         hsv_img1 = cv2.cvtColor(deformed_img, cv2.COLOR_RGB2HSV)
         hsv_img2 = cv2.cvtColor(undeformed_img, cv2.COLOR_RGB2HSV)
@@ -460,34 +443,11 @@ class FullDataset(Dataset):
             relative_depth = cv2.imread(f'{self.samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
             relative_depth = relative_depth / 10000.0
             relative_depth = relative_depth - 1 
+                
             y = relative_depth
             # y1 = y1[:,:,np.newaxis]
-            # y1 = self.transform(y1).float()'
-            
-            # apply transform
-            y = self.transform(y).float()
-            
-            
+            # y1 = self.transform(y1).float()
 
-        # read only depth images
-        if self.output_type == 'depth_stress':
-            relative_depth = cv2.imread(f'{self.samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
-            relative_depth = relative_depth / 10000.0
-            relative_depth = relative_depth - 1 
-            
-            # load bounds json
-            with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
-                bounds = json.load(f)
-            
-            stress2_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress2.png')
-            stress2_img = cv2.cvtColor(stress2_img, cv2.COLOR_BGR2RGB)
-            x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['S12']['max_val_r'] - bounds['S12']['min_val_r'])) + bounds['S12']['min_val_r']
-            x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['S12']['max_val_g'] - bounds['S12']['min_val_g'])) + bounds['S12']['min_val_g']
-            x3 = ((stress2_img[:,:,2] / 255.0) * (bounds['S12']['max_val_b'] - bounds['S12']['min_val_b'])) + bounds['S12']['min_val_b']
-            stress2 = np.stack([x1, x2, x3], axis=2)
-            stress2 = stress2 * self.output_mask[:, :, np.newaxis]
-            
-            y = np.concatenate([relative_depth[:, :, None], stress2], axis=2)
             # apply transform
             y = self.transform(y).float()
 
@@ -541,11 +501,8 @@ class FullDataset(Dataset):
             
             area_shear = area_shear * self.output_mask[:,:,np.newaxis]
             
-            # data = (cnorm, stress1, stress2, displacement, area_shear)
-            data = (area_shear)
-            
-            # data = np.concatenate(data, axis=2)
-            # data = 20 * data
+            data = (cnorm, stress1, stress2, displacement, area_shear)
+            data = np.concatenate(data, axis=2)
             y = data
 
             # apply transform
@@ -557,7 +514,7 @@ class FullDataset(Dataset):
         X = (deformed_img_norm, undeformed_img_norm, image_diff)
         X = np.concatenate(X, axis=2)
         X = self.transform(X).float()
-        # y = y * 1000
+        y = y * 1000
         
         return X, y
         
@@ -631,10 +588,10 @@ def crop_image(image, left, right, top, bottom):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Set dataset parameters dynamically')
-    parser.add_argument('--samples_dir', type=str, default='real_world_dataset', help='Directory of the samples')
-    parser.add_argument('--root_dir', type=str, default='../DenseTact-Calibration-M/real_world_data_v2', help='Root directory of original dataset')
+    parser.add_argument('--samples_dir', type=str, default='real_world_depth', help='Directory of the samples')
+    parser.add_argument('--root_dir', type=str, default='real_world_data_depth', help='Root directory of ORIGINAL dataset')
     parser.add_argument('--is_real_world', type=bool, default=True, help='Flag to indicate if it is real world data')
-
+    
     args = parser.parse_args()
 
     samples_dir = args.samples_dir
@@ -646,119 +603,7 @@ if __name__ == '__main__':
         transforms.Resize((256, 256), antialias=True),
     ])
     
-    
-    # combined_mae_dataset = CombinedMAEDataset(dir1='../DenseTact-Calibration-M/real_dataset', dir2='real_world_depth', transform=transform)
-    
-    # X = combined_mae_dataset[10]
-    
-    # # plot image
-    # X = X.permute(1, 2, 0).numpy()
-    # plt.imshow(X)
-    # plt.show()
-    
     dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
-                          root_dir=root_dir, is_real_world=is_real_world, output_type='full')
-    full_max = 0
-    full_min = 0
+                          root_dir=root_dir, is_real_world=is_real_world, output_type='depth')
     
-    idxes = np.random.randint(0, len(dataset), 1000)
-    for i in (idxes):
-        X, y = dataset[i]
-        
-        # shape of y is 3 by 256 by 256
-        y = y.permute(1, 2, 0).numpy()
-        # only show the first channel
-        plt.imshow(y[:,:,0])
-        plt.show()
-    
-    
-    # dataset.construct_dataset()
-    
-    ax[1, 2].imshow(displacement_img[:,:,0])
-    ax[1, 2].set_title("Displacement Image")
-    plt.show()
-    
-    # use this line to construct the dataset if it has not been constructed
-    # dataset.construct_dataset()
-    # get random idxes
-    # idxes = np.random.randint(0, len(dataset), 1000)
-    # for i in (idxes):
-    #     X, y = dataset[i]
-    #     # plot the second channel
-    #     y = y.permute(1, 2, 0).numpy()
-    #     print(y.shape)
-    #     # plot the 2nd channel of y
-    #     plt.imshow(y[:,:,1])
-    #     plt.show()
-
-    #     deformed_img_norm = X[0:3]
-    #     undeformed_img_norm = X[3:6]
-    #     image_diff = X[6]
-        
-    #     # reshape to python image format
-    #     deformed_img_norm = deformed_img_norm.permute(1, 2, 0).numpy()
-    #     undeformed_img_norm = undeformed_img_norm.permute(1, 2, 0).numpy()
-    #     image_diff = image_diff.numpy()
-        
-    #     # plot images and diff
-    #     fig, ax = plt.subplots(1, 3, figsize=(12, 8))
-    #     ax[0].imshow(deformed_img_norm)
-    #     ax[0].set_title("Deformed Image")
-    #     ax[1].imshow(undeformed_img_norm)
-    #     ax[1].set_title("Undeformed Image")
-    #     ax[2].imshow(image_diff, cmap='gray')
-    #     ax[2].set_title("Image Difference")
-    #     plt.show()
-        
-        
-    #     plt.imshow(relative_depth)
-    #     plt.show()
-        
-    #     x1 = y[0].numpy()
-    #     y1 = y[1].numpy()
-    #     z1 = y[2].numpy()
-    #     # plot all three
-    #     fig, ax = plt.subplots(1, 3, figsize=(12, 8))   
-    #     ax[0].imshow(relative_depth)
-    #     ax[0].set_title("Relative Depth")
-    #     ax[1].imshow(y1)
-    #     ax[1].set_title("Y")
-    #     ax[2].imshow(z1)
-    #     ax[2].set_title("Z")
-    #     plt.show()
-
-    #     # visualize the images
-    #     cnorm_img = y[0:3]
-    #     stress1_img = y[3:6]
-    #     stress2_img = y[6:9]
-    #     displacement_img = y[9:12]
-    #     area_shear_img = y[12:15]
-        
-    #     # convert to numpy
-    #     cnorm_img = cnorm_img.permute(1, 2, 0).numpy()
-    #     stress1_img = stress1_img.permute(1, 2, 0).numpy()
-    #     stress2_img = stress2_img.permute(1, 2, 0).numpy()
-    #     displacement_img = displacement_img.permute(1, 2, 0).numpy()
-    #     area_shear_img = area_shear_img.permute(1, 2, 0).numpy()
-        
-        
-    #     # visualize the images
-    #     fig, ax = plt.subplots(2, 3, figsize=(12, 8))
-    #     ax[0, 0].imshow(deformed_img_norm)
-    #     ax[0, 0].set_title("Deformed Image")
-    #     ax[0, 1].imshow(undeformed_img_norm)
-    #     ax[0, 1].set_title("Undeformed Image")
-        
-    #     ax[0, 2].imshow(image_diff, cmap='gray')
-    #     ax[0, 2].set_title("Image Difference")
-        
-    #     # show one channel 
-    #     ax[1, 0].imshow(cnorm_img[:,:,0])
-    #     ax[1, 0].set_title("CNORM Image")
-        
-    #     ax[1, 1].imshow(stress1_img[:,:,0])
-    #     ax[1, 1].set_title("Stress1 Image")
-        
-    #     ax[1, 2].imshow(displacement_img[:,:,0])
-    #     ax[1, 2].set_title("Displacement Image")
-    #     plt.show()
+    dataset.construct_dataset()
