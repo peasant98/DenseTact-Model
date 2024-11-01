@@ -114,6 +114,7 @@ class CombinedMAEDataset(Dataset):
         return image
         
 class FullDataset(Dataset):
+    OUTPUT_TYPES = ['depth', 'stress', 'disp', 'shear']
     def __init__(self,  transform=None, 
                  samples_dir='../Documents/Dataset/sim_dataset', 
                  output_type='depth', 
@@ -135,7 +136,9 @@ class FullDataset(Dataset):
         self.transform = transform  
         self.output_type = output_type
 
-        assert output_type in ['none', 'depth', 'depth_stress', 'full'], "Output type must be one of 'none', 'depth', 'full'"
+        for t in output_type:
+            assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, \
+                                                Input was {t}"
         self.is_real_world = is_real_world
         
         if self.is_real_world:
@@ -455,112 +458,90 @@ class FullDataset(Dataset):
         # normalize image diff
         image_diff = image_diff / 255.0
 
-        # read only depth images
-        if self.output_type == 'depth':
-            relative_depth = cv2.imread(f'{self.samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
-            relative_depth = relative_depth / 10000.0
-            relative_depth = relative_depth - 1 
-            y = relative_depth
-            # y1 = y1[:,:,np.newaxis]
-            # y1 = self.transform(y1).float()'
+        data_pack = []
+
+        # load bounds json
+        with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
+            bounds = json.load(f)
+
+        for t in self.output_type:
+           
+            if t == 'depth':
+                # process depth
+                relative_depth = cv2.imread(f'{self.samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
+                relative_depth = relative_depth / 10000.0
+                relative_depth = relative_depth - 1 
+                y = relative_depth
+                y = y[:,:,np.newaxis]
+                data_pack.append(y)
+
+            elif t == 'cnorm':
+                cnorm_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/cnorm.png')
+                cnorm_img = cv2.cvtColor(cnorm_img, cv2.COLOR_BGR2RGB)
+                x1 = ((cnorm_img[:,:,0] / 255.0) * (bounds['CNORM']['max_val_r'] - bounds['CNORM']['min_val_r'])) + bounds['CNORM']['min_val_r']
+                x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['CNORM']['max_val_g'] - bounds['CNORM']['min_val_g'])) + bounds['CNORM']['min_val_g']
+                x3 = ((cnorm_img[:,:,2] / 255.0) * (bounds['CNORM']['max_val_b'] - bounds['CNORM']['min_val_b'])) + bounds['CNORM']['min_val_b']
+                cnorm = np.stack([x1, x2, x3], axis=2)
+                # apply self.mask to cnorm
+                cnorm = cnorm * self.output_mask[:,:,np.newaxis]
+                data_pack.append(cnorm)
+        
+            elif t == 'stress1':
+                # process stress1
+                stress1_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress1.png')
+                stress1_img = cv2.cvtColor(stress1_img, cv2.COLOR_BGR2RGB)
+                x1 = ((stress1_img[:,:,0] / 255.0) * (bounds['S11']['max_val_r'] - bounds['S11']['min_val_r'])) + bounds['S11']['min_val_r']
+                x2 = ((stress1_img[:,:,1] / 255.0) * (bounds['S11']['max_val_g'] - bounds['S11']['min_val_g'])) + bounds['S11']['min_val_g']
+                x3 = ((stress1_img[:,:,2] / 255.0) * (bounds['S11']['max_val_b'] - bounds['S11']['min_val_b'])) + bounds['S11']['min_val_b']
+                stress1 = np.stack([x1, x2, x3], axis=2)
+                stress1 = stress1 * self.output_mask[:,:,np.newaxis]
+                data_pack.append(stress1)
             
+            elif t == 'stress2':
+                # process stress2
+                stress2_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress2.png')
+                stress2_img = cv2.cvtColor(stress2_img, cv2.COLOR_BGR2RGB)
+                x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['S12']['max_val_r'] - bounds['S12']['min_val_r'])) + bounds['S12']['min_val_r']
+                x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['S12']['max_val_g'] - bounds['S12']['min_val_g'])) + bounds['S12']['min_val_g']
+                x3 = ((stress2_img[:,:,2] / 255.0) * (bounds['S12']['max_val_b'] - bounds['S12']['min_val_b'])) + bounds['S12']['min_val_b']
+                stress2 = np.stack([x1, x2, x3], axis=2)
+                stress2 = stress2 * self.output_mask[:, :, np.newaxis]
+                data_pack.append(stress2)
+
+            elif t == 'disp':
+                # process displacement
+                displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/displacement.png')
+                displacement_img = cv2.cvtColor(displacement_img, cv2.COLOR_BGR2RGB)
+                x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['UU1']['max_val_r'] - bounds['UU1']['min_val_r'])) + bounds['UU1']['min_val_r']
+                x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['UU1']['max_val_g'] - bounds['UU1']['min_val_g'])) + bounds['UU1']['min_val_g']
+                x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['UU1']['max_val_b'] - bounds['UU1']['min_val_b'])) + bounds['UU1']['min_val_b']
+                displacement = np.stack([x1, x2, x3], axis=2)
+                displacement = displacement * self.output_mask[:,:,np.newaxis]
+                data_pack.append(displacement)
+
+            elif t == "shear":
+                # process area shear
+                area_shear_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/area_shear.png')
+                area_shear_img = cv2.cvtColor(area_shear_img, cv2.COLOR_BGR2RGB)
+                x1 = ((area_shear_img[:,:,0] / 255.0) * (bounds['CNAREA']['max_val_r'] - bounds['CNAREA']['min_val_r'])) + bounds['CNAREA']['min_val_r']
+                x2 = ((area_shear_img[:,:,1] / 255.0) * (bounds['CNAREA']['max_val_g'] - bounds['CNAREA']['min_val_g'])) + bounds['CNAREA']['min_val_g']
+                x3 = ((area_shear_img[:,:,2] / 255.0) * (bounds['CNAREA']['max_val_b'] - bounds['CNAREA']['min_val_b'])) + bounds['CNAREA']['min_val_b']
+                area_shear = np.stack([x1, x2, x3], axis=2)
+                area_shear = area_shear * self.output_mask[:,:,np.newaxis]
+                data_pack.append(area_shear)
+
+        if len(data_pack) > 0:
+            y = np.concatenate(data_pack, axis=2)
             # apply transform
-            y = self.transform(y).float()
-            
-            
-
-        # read only depth images
-        if self.output_type == 'depth_stress':
-            relative_depth = cv2.imread(f'{self.samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
-            relative_depth = relative_depth / 10000.0
-            relative_depth = relative_depth - 1 
-            
-            # load bounds json
-            with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
-                bounds = json.load(f)
-            
-            stress2_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress2.png')
-            stress2_img = cv2.cvtColor(stress2_img, cv2.COLOR_BGR2RGB)
-            x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['S12']['max_val_r'] - bounds['S12']['min_val_r'])) + bounds['S12']['min_val_r']
-            x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['S12']['max_val_g'] - bounds['S12']['min_val_g'])) + bounds['S12']['min_val_g']
-            x3 = ((stress2_img[:,:,2] / 255.0) * (bounds['S12']['max_val_b'] - bounds['S12']['min_val_b'])) + bounds['S12']['min_val_b']
-            stress2 = np.stack([x1, x2, x3], axis=2)
-            stress2 = stress2 * self.output_mask[:, :, np.newaxis]
-            
-            y = np.concatenate([relative_depth[:, :, None], stress2], axis=2)
-            # apply transform
-            y = self.transform(y).float()
-
-        # read all labels
-        elif self.output_type == 'full':  
-            # load bounds json
-            with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
-                bounds = json.load(f)
-                
-            cnorm_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/cnorm.png')
-            cnorm_img = cv2.cvtColor(cnorm_img, cv2.COLOR_BGR2RGB)
-            x1 = ((cnorm_img[:,:,0] / 255.0) * (bounds['CNORM']['max_val_r'] - bounds['CNORM']['min_val_r'])) + bounds['CNORM']['min_val_r']
-            x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['CNORM']['max_val_g'] - bounds['CNORM']['min_val_g'])) + bounds['CNORM']['min_val_g']
-            x3 = ((cnorm_img[:,:,2] / 255.0) * (bounds['CNORM']['max_val_b'] - bounds['CNORM']['min_val_b'])) + bounds['CNORM']['min_val_b']
-            
-            cnorm = np.stack([x1, x2, x3], axis=2)
-            # apply self.mask to cnorm
-            cnorm = cnorm * self.output_mask[:,:,np.newaxis]
-            
-            stress1_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress1.png')
-            stress1_img = cv2.cvtColor(stress1_img, cv2.COLOR_BGR2RGB)
-            
-            x1 = ((stress1_img[:,:,0] / 255.0) * (bounds['S11']['max_val_r'] - bounds['S11']['min_val_r'])) + bounds['S11']['min_val_r']
-            x2 = ((stress1_img[:,:,1] / 255.0) * (bounds['S11']['max_val_g'] - bounds['S11']['min_val_g'])) + bounds['S11']['min_val_g']
-            x3 = ((stress1_img[:,:,2] / 255.0) * (bounds['S11']['max_val_b'] - bounds['S11']['min_val_b'])) + bounds['S11']['min_val_b']
-            stress1 = np.stack([x1, x2, x3], axis=2)
-            stress1 = stress1 * self.output_mask[:,:,np.newaxis]
-            
-            stress2_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress2.png')
-            stress2_img = cv2.cvtColor(stress2_img, cv2.COLOR_BGR2RGB)
-            x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['S12']['max_val_r'] - bounds['S12']['min_val_r'])) + bounds['S12']['min_val_r']
-            x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['S12']['max_val_g'] - bounds['S12']['min_val_g'])) + bounds['S12']['min_val_g']
-            x3 = ((stress2_img[:,:,2] / 255.0) * (bounds['S12']['max_val_b'] - bounds['S12']['min_val_b'])) + bounds['S12']['min_val_b']
-            stress2 = np.stack([x1, x2, x3], axis=2)
-            stress2 = stress2 * self.output_mask[:,:,np.newaxis]
-            
-            displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/displacement.png')
-            displacement_img = cv2.cvtColor(displacement_img, cv2.COLOR_BGR2RGB)
-            x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['UU1']['max_val_r'] - bounds['UU1']['min_val_r'])) + bounds['UU1']['min_val_r']
-            x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['UU1']['max_val_g'] - bounds['UU1']['min_val_g'])) + bounds['UU1']['min_val_g']
-            x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['UU1']['max_val_b'] - bounds['UU1']['min_val_b'])) + bounds['UU1']['min_val_b']
-            displacement = np.stack([x1, x2, x3], axis=2)
-            displacement = displacement * self.output_mask[:,:,np.newaxis]
-            
-            area_shear_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/area_shear.png')
-            area_shear_img = cv2.cvtColor(area_shear_img, cv2.COLOR_BGR2RGB)
-            x1 = ((area_shear_img[:,:,0] / 255.0) * (bounds['CNAREA']['max_val_r'] - bounds['CNAREA']['min_val_r'])) + bounds['CNAREA']['min_val_r']
-            x2 = ((area_shear_img[:,:,1] / 255.0) * (bounds['CNAREA']['max_val_g'] - bounds['CNAREA']['min_val_g'])) + bounds['CNAREA']['min_val_g']
-            x3 = ((area_shear_img[:,:,2] / 255.0) * (bounds['CNAREA']['max_val_b'] - bounds['CNAREA']['min_val_b'])) + bounds['CNAREA']['min_val_b']
-            area_shear = np.stack([x1, x2, x3], axis=2)
-            
-            area_shear = area_shear * self.output_mask[:,:,np.newaxis]
-            
-            # data = (cnorm, stress1, stress2, displacement, area_shear)
-            data = (area_shear)
-            
-            # data = np.concatenate(data, axis=2)
-            # data = 20 * data
-            y = data
-
-            # apply transform
-            y = self.transform(y).float()
-
-        elif self.output_type == 'none':
+            y = self.transform(y).float()       
+        else:
             y = [0]
 
         X = (deformed_img_norm, undeformed_img_norm, image_diff)
         X = np.concatenate(X, axis=2)
         X = self.transform(X).float()
-        # y = y * 1000
-        
+
         return X, y
-        
     
     def preprocess_depth(self, depth_image):
         if depth_image.ndim == 2:
