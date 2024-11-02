@@ -16,7 +16,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, random_split
 import torchvision.models as models
 from torchvision import transforms
-from process_data import FullDataset
+from process_data import FullDataset, FEAT_CHANNEL
 from lightning.pytorch.loggers import TensorBoardLogger
 
 import lightning as L
@@ -54,8 +54,21 @@ class LightningDTModel(L.LightningModule):
         else:
             raise NotImplementedError("Loss not implemented {}".format(cfg.model.loss))
         
-        self.output_names = self.OUTPUT_ORDER[:sum(self.cfg.model.out_chans)]
-        
+        # check channels
+        total_output_channels = sum(cfg.model.out_chans)
+        dataset_output_type = cfg.dataset.output_type
+        expected_output_channels = sum([FEAT_CHANNEL[t] for t in dataset_output_type])
+        assert total_output_channels == expected_output_channels, \
+                    f"Output channels mismatch {total_output_channels} != {expected_output_channels}"
+
+        self.output_names = []
+        for t in dataset_output_type:
+            if t == "depth":
+                self.output_names.append("depth")
+            else:
+                # extend the three channels
+                self.output_names.extend([f"{t}_x", f"{t}_y", f"{t}_z"])
+
         # MSE for validation
         self.mse = nn.MSELoss()
         

@@ -41,6 +41,15 @@ NAME_TO_RGB_MAPPINGS = {
     'CNAREA': ('CNAREA', 'CSHEAR1', 'CSHEAR2'),
 }
 
+FEAT_CHANNEL = {
+    "depth": 1, 
+    "disp": 3,
+    "stress1": 3,
+    "stress2": 3,
+    "shear": 3,
+    "cnorm": 3
+}
+
 MAX = 0
 MIN = 0
 
