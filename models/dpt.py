@@ -208,10 +208,6 @@ class HieraDPTHead(nn.Module):
             ) for in_chan in in_channels
         ])
 
-        # self.conv_rn = nn.ModuleList([
-        #     nn.Conv2d(out_channel, features, kernel_size=3, stride=1, padding=1, bias=False, groups=1) for out_channel in out_channels
-        # ])
-
         self.refinement_blocks = nn.ModuleList([
             _make_fusion_block(features, use_bn, activation=self.activation) for _ in out_channels
         ])
