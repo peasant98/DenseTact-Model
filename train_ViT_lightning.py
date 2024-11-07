@@ -285,7 +285,7 @@ class LightningDTModel(L.LightningModule):
         self.log(f'{name}/avg_mse', avg_mse, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
 
         psnr = 10 * np.log10(1.0 / avg_mse)
-        self.log(f'{name}/psnr', psnr, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log(f'{name}_psnr', psnr, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
 
         if dist.is_initialized():
             # summarize the results from multiple GPUs
@@ -489,9 +489,9 @@ if __name__ == '__main__':
     
     # create callback to save checkpoints
     checkpoint_callback = ModelCheckpoint(
-        monitor='AUC',
+        monitor='val_psnr',
         dirpath=osp.join(opt.exp_name, 'checkpoints/'),
-        filename='dt_model-{epoch:02d}-{AUC:.2f}',
+        filename='dt_model-{epoch:02d}-{val_psnr:.2f}',
         save_top_k=3,
         verbose=True,
         save_last=True,

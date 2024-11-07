@@ -653,9 +653,12 @@ class HieraDPT(nn.Module):
         encoder_channels = encoder_channels[:self.encoder.q_pool] + encoder_channels[-1:]
 
         if cfg.model.hiera.decoder == "DPT":
-            self.decoder = HieraDPTHead(cfg.model.hiera.decoder_embed_dim, 
+            self.decoder_head = nn.ModuleList([
+                HieraDPTHead(cfg.model.hiera.decoder_embed_dim, 
                                         encoder_channels, out_channels=cfg.model.hiera.decoder_mapping_channels, 
-                                        output_dim=out_dims, use_bn=cfg.model.hiera.use_bn, activation=cfg.model.hiera.activation)
+                                        output_dim=out_dim, use_bn=cfg.model.hiera.use_bn, activation=cfg.model.hiera.activation)
+                for out_dim in out_dims
+            ])
        
         elif cfg.model.hiera.decoder == "Vanilla":
 
