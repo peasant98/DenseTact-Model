@@ -1,0 +1,25 @@
+dataset_ratio: 1.0
+batch_size: 16
+
+model:
+  name: HieraDPT
+  out_chans: [2, 2, 2]
+  pretrained_model: ""
+
+  hiera:
+    decoder: "QUpsampling"
+    decoder_embed_dim: 512
+    decoder_num_heads: 16
+    decoder_depth: 8
+
+dataset:
+  output_type: ["disp", "stress1"]
+  contiguous_on_direction: True
+
+optimizer:
+  name: AdamW
+  lr: 0.001
+
+scheduler:
+  name: linear_cosine
+  warmup: 2000

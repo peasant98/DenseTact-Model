@@ -8,6 +8,7 @@ import argparse
 from typing import Dict
 from weakref import proxy
 from copy import deepcopy
+import matplotlib as mpl
 
 from matplotlib import pyplot as plt
 import torch
@@ -61,13 +62,29 @@ class LightningDTModel(L.LightningModule):
         assert total_output_channels == expected_output_channels, \
                     f"Output channels mismatch {total_output_channels} != {expected_output_channels}"
 
+        
         self.output_names = []
-        for t in dataset_output_type:
-            if t == "depth":
+        if cfg.dataset.contiguous_on_direction:
+            # depth always comes first
+            if "depth" in dataset_output_type:
                 self.output_names.append("depth")
-            else:
-                # extend the three channels
-                self.output_names.extend([f"{t}_x", f"{t}_y", f"{t}_z"])
+
+            # add the other channels
+            for d in ["x", "y", "z"]:
+                for t in dataset_output_type:
+                    if t == "depth":
+                        continue
+                    else:
+                        # extend the three channels
+                        self.output_names.append(f"{t}_{d}")
+        
+        else:
+            for t in dataset_output_type:
+                if t == "depth":
+                    self.output_names.append("depth")
+                else:
+                    for d in ["x", "y", "z"]:
+                        self.output_names.append(f"{t}_{d}")
 
         # MSE for validation
         self.mse = nn.MSELoss()
@@ -107,37 +124,6 @@ class LightningDTModel(L.LightningModule):
 
         # outputs = torch.cat(outputs, dim=1)
         self.log('train/loss', loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
-
-        with torch.no_grad():
-        
-            # visualize the reconstructed images
-            if batch_idx % 100 == 0:
-                X0 = X[0].detach().clone()
-
-                # gt images
-                gt_deform_color = X0[:3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
-                gt_undeform_color = X0[3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
-                gt_diff_color = X0[[6], :, :].detach().cpu().numpy()
-
-                self.logger.experiment.add_image('gt/deform_color', gt_deform_color, self.global_step)
-                self.logger.experiment.add_image('gt/undeform_color', gt_undeform_color, self.global_step)
-                self.logger.experiment.add_image('gt/diff_color', gt_diff_color, self.global_step)
-                
-                # visualize the prediction and Y
-                pred_depth = pred[0].detach().clone()
-                pred_depth = pred_depth.cpu().numpy()
-                gt_depth = Y[0].detach().clone()
-                gt_depth = gt_depth.cpu().numpy()
-                
-                pred_depth_colored = apply_colormap(pred_depth)[0]
-                gt_depth_colored = apply_colormap(gt_depth)[0]
-
-                # Log colored images to TensorBoard
-                self.logger.experiment.add_image('train/pred_depth_colored', pred_depth_colored, self.global_step, dataformats='HWC')
-                self.logger.experiment.add_image('train/gt_depth_colored', gt_depth_colored, self.global_step, dataformats='HWC')
-
-                self.logger.experiment.add_image('train/pred_depth', pred_depth, self.global_step)
-                self.logger.experiment.add_image('train/gt_depth', gt_depth, self.global_step)
         
         return {"loss": loss}
 
@@ -252,24 +238,29 @@ class LightningDTModel(L.LightningModule):
         mse = self.mse(pred, Y)
         
         # visualize first y and pred
-        # if batch_idx % 100 == 0:
-            # for i in range(N):
-            #     gt_depth = Y[i].detach().clone()
-            #     gt_depth = gt_depth.cpu().numpy()
-            #     # remove first dimension
-            #     gt_depth = gt_depth[0]
+        if batch_idx % 10 == 0 and name == "test":
+            for i in range(N):
+                gt_depth = Y[i].detach().clone()
+                gt_depth = gt_depth.cpu().numpy()
                 
-            #     pred_depth = pred[i].detach().clone()
-            #     pred_depth = pred_depth.cpu().numpy()
-            #     pred_depth = pred_depth[0]
+                pred_depth = pred[i].detach().clone()
+                pred_depth = pred_depth.cpu().numpy()
+             
+                # plot both
+                fig, axes = plt.subplots(2, len(self.output_names), figsize=(20, 10))
+
+                pred_ax = axes[0]
+                for name, ax, p in zip(self.output_names, pred_ax, pred_depth):
+                    ax.imshow(p)
+                    ax.set_title(name)
                 
-            #     # plot both
-            #     fig, ax = plt.subplots(1, 2)
-            #     ax[0].imshow(gt_depth)
-            #     ax[0].set_title("GT Depth")
-            #     ax[1].imshow(pred_depth)
-            #     ax[1].set_title("Pred Depth")
-            #     plt.show()
+                gt_ax = axes[1]
+                for name, ax, g in zip(self.output_names, gt_ax, gt_depth):
+                    ax.imshow(g)
+                    ax.set_title(name)
+
+                fig.savefig(osp.join(self.logger.save_dir, f"{name}_prediction_{batch_idx}_{i}.png"))
+                plt.close(fig)
 
         # outputs = torch.cat(outputs, dim=1)
         self.log(f'{name}/mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
@@ -473,8 +464,8 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
     
-    dataset = FullDataset(transform=transform, samples_dir=opt.dataset_dir, 
-                            output_type=cfg.dataset.output_type, is_real_world=opt.real_world)
+    dataset = FullDataset(cfg, transform=transform, 
+                          samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
@@ -526,7 +517,6 @@ if __name__ == '__main__':
         opt.ckpt_path = None
         # have model decoder match number of output channels
         
-    
     if opt.eval:
         trainer.test(model=calibration_model, dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)
     else:

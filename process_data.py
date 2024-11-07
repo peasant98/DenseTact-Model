@@ -123,10 +123,9 @@ class CombinedMAEDataset(Dataset):
         return image
         
 class FullDataset(Dataset):
-    OUTPUT_TYPES = ['depth', 'stress', 'disp', 'shear']
-    def __init__(self,  transform=None, 
+    OUTPUT_TYPES = ['depth', 'stress1', 'stress2', 'disp', 'shear']
+    def __init__(self,  opt, transform=None, 
                  samples_dir='../Documents/Dataset/sim_dataset', 
-                 output_type='depth', 
                  root_dir=None,
                  is_real_world=False):
         """
@@ -143,12 +142,13 @@ class FullDataset(Dataset):
         self.samples_dir = samples_dir
         self.root_dir = root_dir
         self.transform = transform  
-        self.output_type = output_type
+        self.output_type = opt.dataset.output_type
 
-        for t in output_type:
+        for t in opt.dataset.output_type:
             assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, \
                                                 Input was {t}"
         self.is_real_world = is_real_world
+        self.opt = opt
         
         if self.is_real_world:
             # check if real_blender_info.json exists
@@ -540,7 +540,22 @@ class FullDataset(Dataset):
                 data_pack.append(area_shear)
 
         if len(data_pack) > 0:
-            y = np.concatenate(data_pack, axis=2)
+            y = np.concatenate(data_pack, axis=2) # (H, W, C)
+            H, W, _ = y.shape
+
+            if self.opt.dataset.contiguous_on_direction:
+                if "depth" in self.output_type:
+                    depth = y[:, :, [0]]
+                    directions = y[:, :, 1:]
+                else:
+                    depth = None
+                    directions = y
+
+                directions = directions.reshape(H, W, -1, 3)
+                directions = directions.transpose(0, 1, 3, 2) 
+                directions = directions.reshape(H, W, -1) #  contiguous on direction
+                y = np.concatenate([f for f in [depth, directions] if f is not None], axis=2)
+            
             # apply transform
             y = self.transform(y).float()       
         else:
