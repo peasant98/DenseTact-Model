@@ -347,6 +347,16 @@ class VanillaHieraFusionDecoder(nn.Module):
         self.output_dim = output_dim
 
         # TODO Initialize weights
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m, init_bias=0.02):
+        if isinstance(m, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, init_bias)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, init_bias)
+            nn.init.constant_(m.weight, 1.0)
 
     def forward(self, intermediates):
         # Multi-scale fusion
@@ -423,15 +433,11 @@ class SinCosPositionalEncoding2D(nn.Module):
 class HieraQUpsampingDecoder(nn.Module):
     def __init__(self,   
                 in_channels,
-                output_dim,
+                output_dims,
                 norm_layer = partial(nn.LayerNorm, 1e-6),
-                decoder_embed_dim = 256, 
                 decoder_depth_per_stage = 2,
                 mlp_ratio = 4.0,
-                q_pool = 2,
-                mask_unit_size = (8, 8),
                 q_stride = 2,
-                patch_stride = (4, 4),
                 tokens_spatial_shape = (16, 16),
                 decoder_num_heads = 4) -> None:
         """ Vanilla Hiera Fusion Decoder """
@@ -487,30 +493,35 @@ class HieraQUpsampingDecoder(nn.Module):
         # --------------------------------------------------------------------------
 
         # rearrange the output shape
-        self.spatial_decoder = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            nn.Conv2d(in_channels[0], in_channels[0] // 2, kernel_size=3, stride=1, padding=1),
-            nn.ELU(True),
-            # nn.BatchNorm2d(in_channels[0] // 2),
-            nn.Conv2d(in_channels[0] // 2, in_channels[0] // 4, kernel_size=3, stride=1, padding=1),
-            nn.ELU(True),
-            # nn.BatchNorm2d(in_channels[0] // 4),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            nn.Conv2d(in_channels[0] // 4, output_dim, kernel_size=3, stride=1, padding=1)
-        )
+        self.spatial_decoders = nn.ModuleList([
+            nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+                nn.Conv2d(in_channels[0], in_channels[0] // 2, kernel_size=3, stride=1, padding=1),
+                nn.ELU(True),
+                # nn.BatchNorm2d(in_channels[0] // 2),
+                nn.Conv2d(in_channels[0] // 2, in_channels[0] // 4, kernel_size=3, stride=1, padding=1),
+                nn.ELU(True),
+                # nn.BatchNorm2d(in_channels[0] // 4),
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+                nn.Conv2d(in_channels[0] // 4, output_dim, kernel_size=3, stride=1, padding=1)
+            ) for output_dim in output_dims
+        ])
 
         # TODO Initialize weights
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m, init_bias=0.02):
-        if isinstance(m, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-            nn.init.trunc_normal_(m.weight, std=0.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, init_bias)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, init_bias)
-            nn.init.constant_(m.weight, 1.0)
+        self.apply(self.init_weights)
         
+    @torch.no_grad()
+    def init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+    
     def forward(self, intermediates):
         """
         Forward Function
@@ -545,12 +556,13 @@ class HieraQUpsampingDecoder(nn.Module):
             x = stage[-1](x)
             x = x.permute(0, 2, 3, 1) # (B, H, W, C)
 
-        x += intermediates[0]
-
         x = x.permute(0, 3, 1, 2)     # (B, C, H, W)
-        x = self.spatial_decoder(x)
-
-        return x
+        
+        pred = []
+        for spatial_decoder in self.spatial_decoders:
+            pred.append(spatial_decoder(x))
+        pred = torch.cat(pred, dim=1)
+        return pred
     
 
 class DPTV2Net(nn.Module):
@@ -670,18 +682,15 @@ class HieraDPT(nn.Module):
         elif cfg.model.hiera.decoder == "QUpsampling":
 
             decoder_kwargs = dict(
-                decoder_embed_dim=cfg.model.hiera.decoder_embed_dim, 
+                # decoder_embed_dim = cfg.model.hiera.decoder_embed_dim, 
                 decoder_num_heads=cfg.model.hiera.decoder_num_heads, 
-                q_pool=cfg.model.hiera.q_pool,
                 mlp_ratio=cfg.model.hiera.mlp_ratio,
-                mask_unit_size=self.encoder.mask_unit_size,
-                patch_stride = self.encoder.patch_stride,
                 q_stride = self.encoder.q_stride,
                 tokens_spatial_shape = self.encoder.tokens_spatial_shape)
             
             self.decoder_head = nn.ModuleList([
-                HieraQUpsampingDecoder(encoder_channels, output_dim=out_dim, norm_layer=norm_layer, **decoder_kwargs)
-                for out_dim in out_dims
+                HieraQUpsampingDecoder(encoder_channels, output_dims=out_dims, norm_layer=norm_layer, **decoder_kwargs)
+                # for out_dim in out_dims
             ])
         
 
