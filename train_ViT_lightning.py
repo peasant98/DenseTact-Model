@@ -134,7 +134,9 @@ class LightningDTModel(L.LightningModule):
         }
         
         for name in self.output_names:
-            self.validation_stats[name] = dict(NegativeNum=0, FNNum=0, PosNum=0, error_cureve=np.zeros(11), abs_error_curve=np.zeros(11))
+            self.validation_stats[name] = dict(NegativeNum=0, 
+                                                FNNum=0, PosNum=0, num_images = 0, mse = 0,
+                                                error_cureve=np.zeros(11), abs_error_curve=np.zeros(11))
     
     def on_validation_epoch_start(self):
         self.reset_validation_stats()
@@ -215,11 +217,17 @@ class LightningDTModel(L.LightningModule):
             abs_error_curve.append(torch.sum(abs_error > TF_abs_error_thresh).item())
             abs_error_curve = np.array(abs_error_curve)
         
-        return dict(NegativeNum=NegativeNum, FNNum=FNNum, PosNum=PosNum, error_cureve=error_curve, abs_error_curve=abs_error_curve)
+        return dict(NegativeNum=NegativeNum, FNNum=FNNum, num_images=prediction.shape[0], mse = self.mse(prediction, label).item(),
+                        PosNum=PosNum, error_cureve=error_curve, abs_error_curve=abs_error_curve)
     
     def update_metric(self, cumulative_metric_dict:dict, current_step_dict:dict):
-        for key, item in current_step_dict.items():
-            cumulative_metric_dict[key] += item
+        for key in ['NegativeNum', 'FNNum', 'PosNum','error_cureve', 'abs_error_curve']:
+            cumulative_metric_dict[key] += current_step_dict[key] 
+        
+        # update mse
+        fraction = cumulative_metric_dict["num_images"] / (cumulative_metric_dict["num_images"] + current_step_dict["num_images"])
+        cumulative_metric_dict["mse"] = fraction * cumulative_metric_dict["mse"] + (1 - fraction) * current_step_dict["mse"]
+        cumulative_metric_dict["num_images"] += current_step_dict["num_images"]
             
     def _process_prediction(self, prediction:torch.Tensor) -> dict:
         """ Process the prediction and label for computing the metric """
@@ -308,7 +316,11 @@ class LightningDTModel(L.LightningModule):
         depth_AUC_abs = 0.
         if self.global_rank == 0:
             for item in self.output_names:
-                
+                # log mse
+                mse = self.validation_stats[item]["mse"]
+                self.log(f'{name}/{item}/mse', mse, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+
+                # compute FNR
                 FNR = self.validation_stats[item]["FNNum"] / self.validation_stats[item]["NegativeNum"]
 
                 # here FPR is defined as the rel error > 100 %
