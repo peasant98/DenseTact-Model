@@ -490,16 +490,26 @@ class HieraQUpsampingDecoder(nn.Module):
         self.spatial_decoder = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
             nn.Conv2d(in_channels[0], in_channels[0] // 2, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(True),
-            nn.BatchNorm2d(in_channels[0] // 2),
+            nn.ELU(True),
+            # nn.BatchNorm2d(in_channels[0] // 2),
             nn.Conv2d(in_channels[0] // 2, in_channels[0] // 4, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(True),
-            nn.BatchNorm2d(in_channels[0] // 4),
+            nn.ELU(True),
+            # nn.BatchNorm2d(in_channels[0] // 4),
             nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
             nn.Conv2d(in_channels[0] // 4, output_dim, kernel_size=3, stride=1, padding=1)
         )
 
         # TODO Initialize weights
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m, init_bias=0.02):
+        if isinstance(m, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, init_bias)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, init_bias)
+            nn.init.constant_(m.weight, 1.0)
         
     def forward(self, intermediates):
         """
