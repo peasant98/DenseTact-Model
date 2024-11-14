@@ -5,7 +5,8 @@ model:
   name: HieraDPT
   out_chans: [2, 2, 2]
   pretrained_model: ""
-
+  LoRA: True
+  
   hiera:
     decoder: "QUpsampling"
     decoder_embed_dim: 512

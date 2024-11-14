@@ -26,6 +26,9 @@ cfg.model.out_chans = [1]
 cfg.model.loss = "L1"
 cfg.model.backbone = ""
 cfg.model.imagenet_pretrained = False
+cfg.model.LoRA = False
+cfg.model.LoRA_rank = 4
+cfg.model.LoRA_scale = 1
 
 cfg.model.cnn = CN()
 cfg.model.cnn.decoder_mid_dim = [1024, 1024, 512, 256, 64]
@@ -47,6 +50,7 @@ cfg.model.hiera.use_bn = False
 cfg.model.hiera.activation = "leaky_relu"
 cfg.model.hiera.decoder_embed_dim = 256
 cfg.model.hiera.decoder_mapping_channels = [256, 512, 1024]
+cfg.model.hiera.decoder_depth_per_stage = 4
 
 # for Vanilla model (decoder = "Vanilla")
 cfg.model.hiera.decoder_num_heads = 1
