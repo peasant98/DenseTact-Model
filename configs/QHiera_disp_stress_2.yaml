@@ -4,7 +4,7 @@ epochs: 150
 
 model:
   name: HieraDPT
-  out_chans: [2, 2, 2]
+  out_chans: [3, 3]
   pretrained_model: "exp/HieraRealMAE/checkpoints/last.ckpt"
 
   hiera:
@@ -15,14 +15,14 @@ model:
 
 dataset:
   output_type: ["disp", "stress1"]
-  contiguous_on_direction: True
-
-metric:
-  PN_thresh: 0.001
+  contiguous_on_direction: False
 
 optimizer:
   name: AdamW
   lr: 0.001
+
+metric:
+  PN_thresh: 0.001
 
 scheduler:
   name: linear_cosine
