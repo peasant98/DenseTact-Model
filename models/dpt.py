@@ -13,6 +13,7 @@ from models.util.blocks import FeatureFusionBlock, _make_scratch
 # Hiera Encoder
 from models.hiera_layers.hiera import Hiera, HieraBlock
 from models.hiera_layers.hiera_utils import conv_nd
+from models.LoRA import replace_LoRA, MonkeyPatchLoRALinear
 
 
 def _make_fusion_block(features, use_bn, size=None, activation=nn.ReLU()):
@@ -686,6 +687,7 @@ class HieraDPT(nn.Module):
                 decoder_num_heads=cfg.model.hiera.decoder_num_heads, 
                 mlp_ratio=cfg.model.hiera.mlp_ratio,
                 q_stride = self.encoder.q_stride,
+                decoder_depth_per_stage = cfg.model.hiera.decoder_depth_per_stage,
                 tokens_spatial_shape = self.encoder.tokens_spatial_shape)
             
             self.decoder_head = nn.ModuleList([
@@ -693,6 +695,22 @@ class HieraDPT(nn.Module):
                 # for out_dim in out_dims
             ])
         
+    def configure_optimizers(self, cfg):
+        if cfg.optimizer.name == "Adam":
+            optimizer = torch.optim.Adam([
+                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10},
+                {'params': [p for p in self.decoder_head.parameters() if p.requires_grad], 'lr': cfg.optimizer.lr}
+            ])
+        elif cfg.optimizer.name == "AdamW":
+            optimizer = torch.optim.AdamW([
+                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10},
+                {'params': [p for p in self.decoder_head.parameters() if p.requires_grad], 'lr': cfg.optimizer.lr}
+            ])
+
+        return optimizer
+    
+    def replace_LoRA(self, rank, scale):
+        replace_LoRA(self.encoder, MonkeyPatchLoRALinear, rank=rank, lora_scale=scale)
 
     def forward(self, x):
         _, intermediates = self.encoder(x, None, return_intermediates=True)

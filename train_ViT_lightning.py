@@ -26,7 +26,7 @@ from lightning.pytorch.callbacks import LearningRateMonitor
 
 from configs import get_cfg_defaults
 
-from models import build_model
+from models import build_model, replace_LoRA, MonkeyPatchLoRALinear, HieraDPT
 from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
@@ -46,6 +46,15 @@ class LightningDTModel(L.LightningModule):
         self.cfg = cfg
 
         self.model = build_model(cfg)
+
+        if len(self.cfg.model.pretrained_model) > 0 and self.trainer.current_epoch == 0:
+            print("Load pretrained model")
+            self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)   
+            self.model.freeze_encoder()
+
+            # use LoRA finetune
+            if cfg.model.LoRA:
+                self.model.replace_LoRA(self.cfg.model.LoRA_rank, self.cfg.model.LoRA_scale)
 
         # build loss
         if cfg.model.loss == "L1":
@@ -97,18 +106,7 @@ class LightningDTModel(L.LightningModule):
         # only load pre-trained model at the first epoch
         if len(self.cfg.model.pretrained_model) > 0 and self.trainer.current_epoch == 0:
             print("Load pretrained model")
-            self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)
-
-    def on_train_epoch_start(self):
-        """ 
-        I decide to always freeze the encoder when loading from a pretrained model 
-        If you want to finetune the encoder, you can load from a checkpoint and set the pretrained_model to ""
-        """
-        if len(self.cfg.model.pretrained_model) > 0 :
-            print("Freezing encoder when loading from pretrained model")
-            self.model.freeze_encoder()
-            # else:
-            #     self.model.unfreeze_encoder()
+            self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)            
             
     def training_step(self, batch, batch_idx):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
@@ -423,14 +421,14 @@ class LightningDTModel(L.LightningModule):
             stats["fig"].savefig(osp.join(self.logger.save_dir, "test_error_curve.png"))
             
     def configure_optimizers(self):
-        if len(self.cfg.model.pretrained_model) > 0 :
-            print("Freezing encoder when loading from pretrained model")
-            self.model.freeze_encoder()
-
-        if self.cfg.optimizer.name == "Adam":
-            optimizer = optim.Adam([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
-        elif self.cfg.optimizer.name == "AdamW":
-            optimizer = optim.AdamW([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
+        
+        if isinstance(self.model, HieraDPT):
+            optimizer = self.model.configure_optimizers(self.cfg)
+        else:
+            if self.cfg.optimizer.name == "Adam":
+                optimizer = optim.Adam([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
+            elif self.cfg.optimizer.name == "AdamW":
+                optimizer = optim.AdamW([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
 
         opt_config = dict(optimizer = optimizer)
         

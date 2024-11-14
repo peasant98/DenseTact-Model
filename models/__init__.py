@@ -4,6 +4,7 @@ from .dense import DTDenseNet, DTNet
 
 from .model_mae import mae_vit_base_patch16, mae_vit_large_patch16
 from .hiera_mae import mae_hiera_base_256, mae_hiera_base_plus_256, mae_hiera_large_256
+from .LoRA import replace_LoRA, MonkeyPatchLoRALinear
 
 pretrain_dict = {
     "mae_hiera_base_256": mae_hiera_base_256,
