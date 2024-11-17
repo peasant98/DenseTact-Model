@@ -1,11 +1,12 @@
 dataset_ratio: 1.0
-batch_size: 32
+batch_size: 24
 epochs: 150
 
 model:
   name: HieraDPT
   out_chans: [3, 3]
   pretrained_model: "exp/HieraRealMAE/checkpoints/last.ckpt"
+  LoRA: False
 
   hiera:
     decoder: "QUpsampling"

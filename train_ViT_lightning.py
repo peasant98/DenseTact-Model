@@ -47,7 +47,7 @@ class LightningDTModel(L.LightningModule):
 
         self.model = build_model(cfg)
 
-        if len(self.cfg.model.pretrained_model) > 0 and self.trainer.current_epoch == 0:
+        if len(self.cfg.model.pretrained_model) > 0:
             print("Load pretrained model")
             self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)   
             self.model.freeze_encoder()
@@ -100,13 +100,7 @@ class LightningDTModel(L.LightningModule):
         
         self.num_epochs = cfg.epochs
         self.total_steps = cfg.total_steps
-        self.validation_stats = {}
-
-    def on_train_start(self):
-        # only load pre-trained model at the first epoch
-        if len(self.cfg.model.pretrained_model) > 0 and self.trainer.current_epoch == 0:
-            print("Load pretrained model")
-            self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)            
+        self.validation_stats = {}        
             
     def training_step(self, batch, batch_idx):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
