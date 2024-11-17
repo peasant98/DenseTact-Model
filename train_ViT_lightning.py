@@ -9,6 +9,7 @@ from typing import Dict
 from weakref import proxy
 from copy import deepcopy
 import matplotlib as mpl
+import datetime
 
 from matplotlib import pyplot as plt
 import torch
@@ -18,7 +19,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import torchvision.models as models
 from torchvision import transforms
 from process_data import FullDataset, FEAT_CHANNEL
-from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 
 import lightning as L
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
@@ -111,11 +112,26 @@ class LightningDTModel(L.LightningModule):
         
         N, C, H, W = X.shape 
         
+        total_loss = 0. 
         pred = self.model(X) 
-        loss = self.criterion(pred, Y * self.cfg.scale)
+        pred_dict = self._process_prediction(pred)
+        target_dict = self._process_prediction(Y)
+        for name in self.output_names:
+            p, y = pred_dict[name], target_dict[name]
+            loss = self.criterion(p, y * self.cfg.scale)
+
+            if 'disp' in name:
+                weight = self.cfg.loss.disp_weight
+            elif 'stress' in name:
+                weight = self.cfg.loss.stress_weight
+            elif 'depth' in name:
+                weight = self.cfg.loss.depth_weight
+
+            total_loss += weight * loss
+            self.log(f'train/{name}/loss', loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
 
         # outputs = torch.cat(outputs, dim=1)
-        self.log('train/loss', loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('train/loss', total_loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
         
         return {"loss": loss}
 
@@ -125,7 +141,7 @@ class LightningDTModel(L.LightningModule):
             "mse": [],
         }
         
-        for name in self.output_names:
+        for name in self.cfg.dataset.output_type:
             self.validation_stats[name] = dict(NegativeNum=0, 
                                                 FNNum=0, PosNum=0, num_images = 0, mse = 0,
                                                 error_cureve=np.zeros(11), abs_error_curve=np.zeros(11))
@@ -162,7 +178,6 @@ class LightningDTModel(L.LightningModule):
         prediction_flatten = prediction.flatten()
         label_flatten = label.flatten()
 
-        num_pixels = label_flatten.shape[0]
         num_bins = self.cfg.metric.num_bins
         interval = TF_rel_error_rate / num_bins
         threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
@@ -202,6 +217,90 @@ class LightningDTModel(L.LightningModule):
 
             # compute abs error
             abs_error = torch.abs(gt_pos_items - pred_pos_items)
+
+            for thresh in threshold_abs:
+                abs_error_curve.append(torch.sum(abs_error < thresh).item())
+
+            abs_error_curve.append(torch.sum(abs_error > TF_abs_error_thresh).item())
+            abs_error_curve = np.array(abs_error_curve)
+        
+        return dict(NegativeNum=NegativeNum, FNNum=FNNum, num_images=prediction.shape[0], mse = self.mse(prediction, label).item(),
+                        PosNum=PosNum, error_cureve=error_curve, abs_error_curve=abs_error_curve)
+    
+    @torch.no_grad()
+    def compute_metric_vector(self, prediction:torch.Tensor, 
+                       label:torch.Tensor,
+                       PN_thresh:float=1e-6,
+                       TF_rel_error_rate:float=0.1,
+                       TF_abs_error_thresh:float=1e-3):
+        """ Compute the prediction metric 
+        
+        Args:
+            prediction: (N, 3, H, W)
+            label: (N, 3, H, W)
+            
+            PN_thresh: threshold for negative samples
+            TF_rel_error_rate: threshold for relative error
+            TF_abs_error_thresh: threshold for absolute error
+
+        Returns:
+            dict: dictionary of metrics
+                NegativeNum: Number of negative samples
+                FNNum: Number of false negative samples
+                PosNum: Number of positive samples
+                error_curve: Error curve (11)
+                    [<0.1, <0.2, ..., <0.9, <1.0, >1.0]
+                abs_error_curve: Absolute error curve
+                    [<0.1mm, <0.2mm, ..., <0.9mm, <1.0mm, >1.0mm]
+        """
+        prediction = prediction.permute(0, 2, 3, 1).reshape(-1, 3) # (N, 3)
+        label = label.permute(0, 2, 3, 1).reshape(-1, 3) # (N, 3)
+
+        num_bins = self.cfg.metric.num_bins
+        interval = TF_rel_error_rate / num_bins
+        threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
+        # normally set TF_abs_error_thresh to 1e-3 (=1mm)
+        abs_interval = TF_abs_error_thresh / num_bins
+        threshold_abs = [k * abs_interval for k in range(1, num_bins + 1)]
+
+        # Here, negative samples are the pixels with value than 1e-6
+        # positive samples are the pixels with value greater than 1e-6
+        eps = PN_thresh
+
+        # compute the negative pixels
+        prediction_length = torch.norm(prediction, dim=1)
+        label_length = torch.norm(label, dim=1)
+
+        Neg_mask = label_length < eps
+        Pos_mask = label_length >= eps
+
+        # compute the false negative
+        NegativeNum = torch.sum(Neg_mask).item()
+        FNNum = torch.sum(Neg_mask * (prediction_length >= eps)).item()
+
+        # compute the error curve
+        gt_pos_items = prediction[Pos_mask]
+        gt_pos_length = label_length[Pos_mask]
+
+        pred_pos_items = label[Pos_mask]
+        error_term = torch.norm(gt_pos_items - pred_pos_items, dim=1)
+
+        PosNum = torch.sum(Pos_mask).item()
+        error_curve = []
+        abs_error_curve = []
+        if PosNum > 0:
+            # compute the relative error
+            rel_error = error_term / gt_pos_length
+
+            # compute the threshold ratio
+            for ratio in threshold_ratio:
+                error_curve.append(torch.sum(rel_error < ratio).item())
+
+            error_curve.append(torch.sum(rel_error > TF_rel_error_rate).item())
+            error_curve = np.array(error_curve)
+
+            # compute abs error
+            abs_error = error_term
 
             for thresh in threshold_abs:
                 abs_error_curve.append(torch.sum(abs_error < thresh).item())
@@ -269,11 +368,23 @@ class LightningDTModel(L.LightningModule):
         predict_dict, label_dict = self._process_prediction(pred), self._process_prediction(Y)
 
         # compute force metric
-        for name in self.output_names:
-            metric_dict = self.compute_metric(predict_dict[name], label_dict[name],
-                                                     PN_thresh=self.cfg.metric.PN_thresh,
-                                                     TF_rel_error_rate=self.cfg.metric.TF_rel_error_rate,
-                                                     TF_abs_error_thresh=self.cfg.metric.TF_abs_error_thresh)
+        for name in self.cfg.dataset.output_type:
+            if name == 'depth':
+                metric_dict = self.compute_metric(predict_dict[name], label_dict[name],
+                                                  PN_thresh=self.cfg.metric.PN_thresh,
+                                                  TF_rel_error_rate=self.cfg.metric.TF_rel_error_rate,
+                                                  TF_abs_error_thresh=self.cfg.metric.TF_abs_error_thresh)
+            else:
+                channels = [f"{name}_{d}" for d in ["x", "y", "z"]]
+                pred_vec = torch.stack([predict_dict[c] for c in channels], dim=1)
+                label_vec = torch.stack([label_dict[c] for c in channels], dim=1)
+
+                # compute vector metric
+                metric_dict = self.compute_metric_vector(pred_vec, label_vec,
+                                                        PN_thresh=self.cfg.metric.PN_thresh,
+                                                        TF_rel_error_rate=self.cfg.metric.TF_rel_error_rate,
+                                                        TF_abs_error_thresh=self.cfg.metric.TF_abs_error_thresh)
+                
             self.update_metric(self.validation_stats[name], metric_dict)
 
     def validation_step(self, batch, batch_idx):
@@ -307,7 +418,7 @@ class LightningDTModel(L.LightningModule):
         # compute the metric in the rank = 0
         depth_AUC_abs = 0.
         if self.global_rank == 0:
-            for item in self.output_names:
+            for item in self.cfg.dataset.output_type:
                 # log mse
                 mse = self.validation_stats[item]["mse"]
                 self.log(f'{name}/{item}/mse', mse, on_step=False, on_epoch=True, prog_bar=True, logger=True)
@@ -322,19 +433,19 @@ class LightningDTModel(L.LightningModule):
                 FPR_abs = self.validation_stats[item]["abs_error_curve"][-1] / self.validation_stats[item]["PosNum"]
 
                 # log
-                self.log(f'{name}/{item}/FNR', FNR, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-                self.log(f'{name}/{item}/FPR_rel', FPR_rel, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-                self.log(f'{name}/{item}/FPR_abs', FPR_abs, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                self.log(f'{name}/{item}/FNR', FNR, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+                self.log(f'{name}/{item}/FPR_rel', FPR_rel, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+                self.log(f'{name}/{item}/FPR_abs', FPR_abs, on_step=False, on_epoch=True, prog_bar=False, logger=True)
 
                 # draw the curve
                 error_curve = self.validation_stats[item]["error_cureve"][:-1] / self.validation_stats[item]["PosNum"]
                 # compute the Area under curve
                 AUC_rel = np.mean(error_curve)
-                self.log(f'{name}/{item}/AUC_rel', AUC_rel, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                self.log(f'{name}/{item}/AUC_rel', AUC_rel, on_step=False, on_epoch=True, prog_bar=False, logger=True)
                 
                 abs_error_curve = self.validation_stats[item]["abs_error_curve"][:-1] / self.validation_stats[item]["PosNum"]
                 AUC_abs = np.mean(abs_error_curve)
-                self.log(f'{name}/{item}/AUC_abs', AUC_abs, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+                self.log(f'{name}/{item}/AUC_abs', AUC_abs, on_step=False, on_epoch=True, prog_bar=False, logger=True)
                 
                 # select depth as final metric
                 if item == "depth":
@@ -360,7 +471,10 @@ class LightningDTModel(L.LightningModule):
                     ax.plot(threshold_ratio, error_curve, label="Error Curve")
                     ax.set_xlabel("Threshold")
                     ax.set_ylabel("Error Rate")
-                    self.logger.experiment.add_figure(f"{name}/{item}/Rel Error Curve", fig, self.global_step)
+                    if isinstance(self.logger, TensorBoardLogger):
+                        self.logger.experiment.add_figure(f"{name}/{item}/Rel Error Curve", fig, self.global_step)
+                    # else:
+                    #     fig.savefig(osp.join(self.logger.save_dir, f"{name}_{item}_error_curve_{self.global_step}.png"))
                     # fig.clf()
 
                     # draw the plot of the abs error curve
@@ -376,7 +490,10 @@ class LightningDTModel(L.LightningModule):
                     ax.plot(threshold_abs, abs_error_curve, label="Abs Error Curve")
                     ax.set_xlabel("Threshold")
                     ax.set_ylabel("Error Rate")
-                    self.logger.experiment.add_figure(f"{name}/{item}/Abs Error Curve", fig, self.global_step)
+                    if isinstance(self.logger, TensorBoardLogger):
+                        self.logger.experiment.add_figure(f"{name}/{item}/Abs Error Curve", fig, self.global_step)
+                    # else:
+                    #     fig.savefig(osp.join(self.logger.save_dir, f"{name}_{item}_abs_error_curve_{self.global_step}.png"))
 
         sync_data = depth_AUC_abs * 100 if self.global_rank == 0 else 0
         if dist.is_initialized():
@@ -446,6 +563,7 @@ if __name__ == '__main__':
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/dt_vit.yaml")
+    arg.add_argument('--logger', type=str, default="wandb")
     arg.add_argument('--dataset_dir', type=str, default="../Documents/Dataset/sim_dataset")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
@@ -489,7 +607,14 @@ if __name__ == '__main__':
 
     calibration_model = LightningDTModel(cfg)
 
-    logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
+    # get date
+    date = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    name = "{}-{}".format(opt.exp_name.split("/")[-1], date)
+   
+    if opt.logger == "tensorboard":
+        logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
+    if opt.logger == "wandb":
+        logger = WandbLogger(project="DenseTact", name=name)
     
     # create callback to save checkpoints
     checkpoint_callback = ModelCheckpoint(

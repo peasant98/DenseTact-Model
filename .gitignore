@@ -9,6 +9,7 @@ runs/
 __pycache__/
 viz/
 viz_lightning/
+wandb/
 
 output
 test_data
