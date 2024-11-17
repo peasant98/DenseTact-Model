@@ -15,6 +15,11 @@ cfg.scale = 1.
 cfg.gradient_clip_val = None
 cfg.gradient_clip_algorithm = None
 
+cfg.loss = CN()
+cfg.loss.stress_weight = 20.
+cfg.loss.disp_weight = 1.
+cfg.loss.depth_weight = 1.
+
 cfg.model = CN()
 cfg.model.name = "DPT"
 cfg.model.pretrained_model = ""
