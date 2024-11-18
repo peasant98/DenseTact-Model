@@ -2,6 +2,9 @@ dataset_ratio: 1.0
 batch_size: 24
 epochs: 150
 
+loss:
+  stress_weight: 10.
+
 model:
   name: HieraDPT
   out_chans: [3, 3]

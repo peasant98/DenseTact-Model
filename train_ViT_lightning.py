@@ -9,6 +9,7 @@ from typing import Dict
 from weakref import proxy
 from copy import deepcopy
 import matplotlib as mpl
+import wandb
 import datetime
 
 from matplotlib import pyplot as plt
@@ -114,11 +115,19 @@ class LightningDTModel(L.LightningModule):
         
         total_loss = 0. 
         pred = self.model(X) 
-        pred_dict = self._process_prediction(pred)
-        target_dict = self._process_prediction(Y)
-        for name in self.output_names:
-            p, y = pred_dict[name], target_dict[name]
-            loss = self.criterion(p, y * self.cfg.scale)
+        predict_dict = self._process_prediction(pred)
+        label_dict = self._process_prediction(Y)
+
+        for name in self.cfg.dataset.output_type:
+            if name == 'depth':
+                loss = self.criterion(predict_dict[name], label_dict[name] * self.cfg.scale)
+
+            else:
+                channels = [f"{name}_{d}" for d in ["x", "y", "z"]]
+                pred_vec = torch.stack([predict_dict[c] for c in channels], dim=1)
+                label_vec = torch.stack([label_dict[c] for c in channels], dim=1)
+
+                loss = self.criterion(pred_vec, label_vec * self.cfg.scale)
 
             if 'disp' in name:
                 weight = self.cfg.loss.disp_weight
@@ -128,7 +137,7 @@ class LightningDTModel(L.LightningModule):
                 weight = self.cfg.loss.depth_weight
 
             total_loss += weight * loss
-            self.log(f'train/{name}/loss', loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+            self.log(f'train/{name}/loss', weight * loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
 
         # outputs = torch.cat(outputs, dim=1)
         self.log('train/loss', total_loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
@@ -614,7 +623,7 @@ if __name__ == '__main__':
     if opt.logger == "tensorboard":
         logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
     if opt.logger == "wandb":
-        logger = WandbLogger(project="DenseTact", name=name)
+        logger = WandbLogger(project="DenseTact", name=name, config=cfg)
     
     # create callback to save checkpoints
     checkpoint_callback = ModelCheckpoint(
