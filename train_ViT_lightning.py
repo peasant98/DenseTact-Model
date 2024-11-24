@@ -142,7 +142,7 @@ class LightningDTModel(L.LightningModule):
         # outputs = torch.cat(outputs, dim=1)
         self.log('train/loss', total_loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
         
-        return {"loss": loss}
+        return {"loss": total_loss}
 
     def reset_validation_stats(self):
         """ resetting stats for val/test """
