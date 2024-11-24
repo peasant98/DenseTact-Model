@@ -27,6 +27,7 @@ optimizer:
 
 metric:
   PN_thresh: 0.001
+  TF_abs_error_thresh: 0.01
 
 scheduler:
   name: linear_cosine
