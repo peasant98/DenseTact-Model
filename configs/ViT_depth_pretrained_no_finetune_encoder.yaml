@@ -7,3 +7,11 @@ model:
 
 dataset:
   output_type: "depth"
+
+optimizer:
+  name: AdamW
+  lr: 0.001
+
+scheduler:
+  name: linear_cosine
+  warmup: 2000

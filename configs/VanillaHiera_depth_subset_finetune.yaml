@@ -1,4 +1,6 @@
 dataset_ratio: 0.4
+batch_size: 64
+scale: 1000.
 
 model:
   name: HieraDPT
@@ -13,7 +15,6 @@ model:
 
 dataset:
   output_type: "depth"
-  dataset_path: "../DenseTact-Calibration-M/sim_dataset"
 
 optimizer:
   name: AdamW

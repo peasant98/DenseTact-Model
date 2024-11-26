@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 import torch
 import math
 from functools import partial
@@ -12,12 +13,13 @@ from models.util.blocks import FeatureFusionBlock, _make_scratch
 # Hiera Encoder
 from models.hiera_layers.hiera import Hiera, HieraBlock
 from models.hiera_layers.hiera_utils import conv_nd
+from models.LoRA import replace_LoRA, MonkeyPatchLoRALinear
 
 
-def _make_fusion_block(features, use_bn, size=None):
+def _make_fusion_block(features, use_bn, size=None, activation=nn.ReLU()):
     return FeatureFusionBlock(
         features,
-        nn.ReLU(False),
+        activation,
         deconv=False,
         bn=use_bn,
         expand=False,
@@ -170,7 +172,8 @@ class HieraDPTHead(nn.Module):
                 in_channels,
                 out_channels,
                 output_dim,
-                use_bn=False, 
+                use_bn=False,
+                activation:str = "relu"
                 ):
         """
             Args:
@@ -179,11 +182,18 @@ class HieraDPTHead(nn.Module):
                 out_channels: list, number of output channels
                 output_dim: int, output dimension of the model
                 use_bn: bool, use batch normalization
+                activation name: str, activation function name eg. relu, leaky_relu
         """
         super().__init__()
 
         n_layers = len(in_channels)
         assert n_layers == len(out_channels), "Number of input and output channels must be the same"
+
+        self.activation_name = activation
+        if self.activation_name == "relu":
+            self.activation = nn.ReLU()
+        elif self.activation_name == "leaky_relu":
+            self.activation = nn.LeakyReLU()
 
         # head to project features
         self.projects = nn.ModuleList([
@@ -192,20 +202,16 @@ class HieraDPTHead(nn.Module):
                 PermuteLayer((0, 3, 1, 2)),
                 nn.Conv2d(
                     in_channels=in_chan,
-                    out_channels=out_channel,
+                    out_channels=features,
                     kernel_size=1,
                     stride=1,
                     padding=0,
                 )
-            ) for in_chan, out_channel in zip(in_channels, out_channels)
-        ])
-
-        self.conv_rn = nn.ModuleList([
-            nn.Conv2d(out_channel, features, kernel_size=3, stride=1, padding=1, bias=False, groups=1) for out_channel in out_channels
+            ) for in_chan in in_channels
         ])
 
         self.refinement_blocks = nn.ModuleList([
-            _make_fusion_block(features, use_bn) for _ in out_channels
+            _make_fusion_block(features, use_bn, activation=self.activation) for _ in out_channels
         ])
 
         # remove the resConf in the last block, since we don't need it
@@ -217,15 +223,31 @@ class HieraDPTHead(nn.Module):
         self.output_conv1 = nn.Conv2d(head_features_1, head_features_1 // 2, kernel_size=3, stride=1, padding=1)
         self.output_conv2 = nn.Sequential(
             nn.Conv2d(head_features_1 // 2, head_features_2, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(True),
+            # maybe LeakyReLU here
+            self.activation,
+            # nn.BatchNorm2d(head_features_2),
             nn.Conv2d(head_features_2, output_dim, kernel_size=1, stride=1, padding=0),
         )
+
+        self.apply(self.init_weights)
+    
+    @torch.no_grad()
+    def init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity=self.activation_name)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity=self.activation_name)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, out_features):
         out = []
         for i, x in enumerate(out_features):
             x = self.projects[i](x)
-            x = self.conv_rn[i](x)
+            # x = self.conv_rn[i](x)
             out.append(x)
 
         # fuse the feature hierarchically
@@ -326,6 +348,16 @@ class VanillaHieraFusionDecoder(nn.Module):
         self.output_dim = output_dim
 
         # TODO Initialize weights
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m, init_bias=0.02):
+        if isinstance(m, (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, init_bias)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, init_bias)
+            nn.init.constant_(m.weight, 1.0)
 
     def forward(self, intermediates):
         # Multi-scale fusion
@@ -372,6 +404,165 @@ class VanillaHieraFusionDecoder(nn.Module):
         pred = pred.reshape(-1, 256, 256, self.output_dim)
 
         pred = pred.permute(0, 3, 1, 2)
+        return pred
+
+class SinCosPositionalEncoding2D(nn.Module):
+    def __init__(self, height, width, d_model):
+        super(SinCosPositionalEncoding2D, self).__init__()
+        self.height = height
+        self.width = width
+        self.d_model = d_model
+        
+        encoding = self._generate_encoding()
+        self.register_buffer("encoding", encoding)
+
+    def _generate_encoding(self):
+        encoding = np.zeros((self.height, self.width, self.d_model))
+        div_term = np.exp(np.arange(0, self.d_model, 2) * -(np.log(10000.0) / self.d_model))
+
+        pos_h = np.arange(0, self.height).reshape(-1, 1)
+        pos_w = np.arange(0, self.width).reshape(-1, 1)
+
+        encoding[:, :, 0::2] = np.sin(pos_h * div_term)[:, np.newaxis, :]
+        encoding[:, :, 1::2] = np.cos(pos_w * div_term)[np.newaxis, :, :]
+
+        return torch.tensor(encoding, dtype=torch.float32)
+
+    def forward(self, x):
+        return x + self.encoding.unsqueeze(0)
+    
+class HieraQUpsampingDecoder(nn.Module):
+    def __init__(self,   
+                in_channels,
+                output_dims,
+                norm_layer = partial(nn.LayerNorm, 1e-6),
+                decoder_depth_per_stage = 2,
+                mlp_ratio = 4.0,
+                q_stride = 2,
+                tokens_spatial_shape = (16, 16),
+                decoder_num_heads = 4) -> None:
+        """ Vanilla Hiera Fusion Decoder """
+        super().__init__()
+
+        self.channel_stage = in_channels
+
+        tokens_spatial_shape_stages = [
+            [ dim // s ** (i) for dim, s in zip(tokens_spatial_shape, q_stride) ]
+                    for i in range(len(in_channels))
+        ]
+
+        # --------------------------------------------------------------------------
+        # MAE decoder specifics
+        self.pe_stages = nn.ModuleList([
+            SinCosPositionalEncoding2D(*tokens_spatial_shape_stage, channel)
+            for tokens_spatial_shape_stage, channel in zip(tokens_spatial_shape_stages, in_channels)
+        ])
+
+        self.decoder_stages = nn.ModuleList([])
+        num_stages = len(in_channels) - 1
+        for i in range(num_stages, 0, -1):
+            input_channel = in_channels[i]
+
+            # get the position encoding
+
+            # decoder stage
+            decoder_blocks = nn.ModuleList(
+                [
+                    HieraBlock(
+                        dim=input_channel,
+                        dim_out=input_channel,
+                        heads=decoder_num_heads,
+                        norm_layer=norm_layer,
+                        mlp_ratio=mlp_ratio,
+                    )
+                    for i in range(decoder_depth_per_stage - 1)
+                ]
+            )
+            decoder_blocks.append(
+                HieraBlock(
+                    dim=input_channel,
+                    dim_out=in_channels[i - 1],
+                    heads=decoder_num_heads,
+                    norm_layer=norm_layer,
+                    mlp_ratio=mlp_ratio,
+                )
+            )
+            # upsample module
+            decoder_blocks.append(nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True))
+
+            self.decoder_stages.append(decoder_blocks)
+        # --------------------------------------------------------------------------
+
+        # rearrange the output shape
+        self.spatial_decoders = nn.ModuleList([
+            nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+                nn.Conv2d(in_channels[0], in_channels[0] // 2, kernel_size=3, stride=1, padding=1),
+                nn.ELU(True),
+                # nn.BatchNorm2d(in_channels[0] // 2),
+                nn.Conv2d(in_channels[0] // 2, in_channels[0] // 4, kernel_size=3, stride=1, padding=1),
+                nn.ELU(True),
+                # nn.BatchNorm2d(in_channels[0] // 4),
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+                nn.Conv2d(in_channels[0] // 4, output_dim, kernel_size=3, stride=1, padding=1)
+            ) for output_dim in output_dims
+        ])
+
+        # TODO Initialize weights
+        self.apply(self.init_weights)
+        
+    @torch.no_grad()
+    def init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, intermediates):
+        """
+        Forward Function
+
+        Args:
+            intermediates: list, list of intermediate features
+                each in shape (B, H, W, C)
+        """
+        
+        # Multi-scale fusion
+        x = 0.0
+        
+        num_stages = len(intermediates) - 1
+        for i in range(num_stages, 0, -1):
+            x += intermediates[i]
+
+            # add position embedding
+            x = self.pe_stages[i](x)
+
+            # apply decoder blocks
+            stage =  self.decoder_stages[len(intermediates) - 1 - i]
+            B, H, W, C = x.shape
+
+            # pass through the decoder blocks
+            x = x.reshape(B, H * W, C)
+            for k in range(len(stage) - 1):
+                x = stage[k](x)
+            x = x.reshape(B, H, W, self.channel_stage[i - 1])
+        
+            # upsample
+            x = x.permute(0, 3, 1, 2) # (B, C, H, W)
+            x = stage[-1](x)
+            x = x.permute(0, 2, 3, 1) # (B, H, W, C)
+
+        x = x.permute(0, 3, 1, 2)     # (B, C, H, W)
+        
+        pred = []
+        for spatial_decoder in self.spatial_decoders:
+            pred.append(spatial_decoder(x))
+        pred = torch.cat(pred, dim=1)
         return pred
     
 
@@ -437,6 +628,8 @@ class HieraDPT(nn.Module):
 
         in_chans = cfg.model.in_chans
         out_dims = cfg.model.out_chans
+        if isinstance(out_dims, int):
+            out_dims = [out_dims]
         norm_layer = partial(nn.LayerNorm, eps=1e-6)
 
         encoder_kwargs = dict(
@@ -461,9 +654,12 @@ class HieraDPT(nn.Module):
         encoder_channels = encoder_channels[:self.encoder.q_pool] + encoder_channels[-1:]
 
         if cfg.model.hiera.decoder == "DPT":
-            self.decoder = HieraDPTHead(cfg.model.hiera.decoder_embed_dim, 
+            self.decoder_head = nn.ModuleList([
+                HieraDPTHead(cfg.model.hiera.decoder_embed_dim, 
                                         encoder_channels, out_channels=cfg.model.hiera.decoder_mapping_channels, 
-                                        output_dim=out_dims, use_bn=cfg.model.hiera.use_bn)
+                                        output_dim=out_dim, use_bn=cfg.model.hiera.use_bn, activation=cfg.model.hiera.activation)
+                for out_dim in out_dims
+            ])
        
         elif cfg.model.hiera.decoder == "Vanilla":
 
@@ -478,19 +674,55 @@ class HieraDPT(nn.Module):
                 stage_ends = self.encoder.stage_ends,
                 tokens_spatial_shape = self.encoder.tokens_spatial_shape,
                 decoder_depth=cfg.model.hiera.decoder_depth)
-
-            self.decoder = VanillaHieraFusionDecoder(encoder_channels, output_dim=out_dims, norm_layer=norm_layer, 
-                                                     **decoder_kwargs)
+            
+            self.decoder_head = nn.ModuleList([
+                VanillaHieraFusionDecoder(encoder_channels, output_dim=out_dim, norm_layer=norm_layer, **decoder_kwargs)
+                for out_dim in out_dims
+            ])
         
+        elif cfg.model.hiera.decoder == "QUpsampling":
+
+            decoder_kwargs = dict(
+                # decoder_embed_dim = cfg.model.hiera.decoder_embed_dim, 
+                decoder_num_heads=cfg.model.hiera.decoder_num_heads, 
+                mlp_ratio=cfg.model.hiera.mlp_ratio,
+                q_stride = self.encoder.q_stride,
+                decoder_depth_per_stage = cfg.model.hiera.decoder_depth_per_stage,
+                tokens_spatial_shape = self.encoder.tokens_spatial_shape)
+            
+            self.decoder_head = nn.ModuleList([
+                HieraQUpsampingDecoder(encoder_channels, output_dims=out_dims, norm_layer=norm_layer, **decoder_kwargs)
+                # for out_dim in out_dims
+            ])
+        
+    def configure_optimizers(self, cfg):
+        if cfg.optimizer.name == "Adam":
+            optimizer = torch.optim.Adam([
+                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10},
+                {'params': [p for p in self.decoder_head.parameters() if p.requires_grad], 'lr': cfg.optimizer.lr}
+            ])
+        elif cfg.optimizer.name == "AdamW":
+            optimizer = torch.optim.AdamW([
+                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10},
+                {'params': [p for p in self.decoder_head.parameters() if p.requires_grad], 'lr': cfg.optimizer.lr}
+            ])
+
+        return optimizer
+    
+    def replace_LoRA(self, rank, scale):
+        replace_LoRA(self.encoder, MonkeyPatchLoRALinear, rank=rank, lora_scale=scale)
 
     def forward(self, x):
         _, intermediates = self.encoder(x, None, return_intermediates=True)
         intermediates = intermediates[: self.encoder.q_pool] + intermediates[-1:]
 
         # predictions
-        depth = self.decoder(intermediates)
+        preds = []
+        for decoder in self.decoder_head:
+            preds.append(decoder(intermediates))
 
-        return depth    
+        preds = torch.cat(preds, dim=1)
+        return preds    
 
     def freeze_encoder(self):
         self.encoder.eval()

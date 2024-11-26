@@ -10,9 +10,15 @@ cfg.dataset_ratio = 1.
 # seed for every thing
 # include dataset split
 cfg.seed = 42
+cfg.scale = 1.
 
 cfg.gradient_clip_val = None
 cfg.gradient_clip_algorithm = None
+
+cfg.loss = CN()
+cfg.loss.stress_weight = 1.
+cfg.loss.disp_weight = 1.
+cfg.loss.depth_weight = 1.
 
 cfg.model = CN()
 cfg.model.name = "DPT"
@@ -21,10 +27,13 @@ cfg.model.img_size = 256
 cfg.model.patch_size = 16
 cfg.model.in_chans = 7
 cfg.model.encoder = 'vitl'
-cfg.model.out_chans = 15
+cfg.model.out_chans = [1]
 cfg.model.loss = "L1"
 cfg.model.backbone = ""
 cfg.model.imagenet_pretrained = False
+cfg.model.LoRA = False
+cfg.model.LoRA_rank = 4
+cfg.model.LoRA_scale = 1
 
 cfg.model.cnn = CN()
 cfg.model.cnn.decoder_mid_dim = [1024, 1024, 512, 256, 64]
@@ -43,16 +52,18 @@ cfg.model.hiera.mlp_ratio = 4.0
 cfg.model.hiera.decoder = "DPT"
 # for DPT Decoder Head
 cfg.model.hiera.use_bn = False
+cfg.model.hiera.activation = "leaky_relu"
 cfg.model.hiera.decoder_embed_dim = 256
 cfg.model.hiera.decoder_mapping_channels = [256, 512, 1024]
+cfg.model.hiera.decoder_depth_per_stage = 4
 
-# for Vanilla model
+# for Vanilla model (decoder = "Vanilla")
 cfg.model.hiera.decoder_num_heads = 1
 cfg.model.hiera.decoder_depth = 3
 
 cfg.dataset = CN()
-cfg.dataset.output_type = "depth"
-cfg.dataset.dataset_path = "data"
+cfg.dataset.output_type = []
+cfg.dataset.contiguous_on_direction = False
 
 cfg.optimizer = CN()
 cfg.optimizer.name = "Adam"

@@ -8,6 +8,9 @@ import argparse
 from typing import Dict
 from weakref import proxy
 from copy import deepcopy
+import matplotlib as mpl
+import wandb
+import datetime
 
 from matplotlib import pyplot as plt
 import torch
@@ -21,7 +24,6 @@ from process_data import FullDataset, FEAT_CHANNEL
 
 from torchmetrics.functional import structural_similarity_index_measure
 
-from lightning.pytorch.loggers import TensorBoardLogger
 
 import lightning as L
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
@@ -29,7 +31,7 @@ from lightning.pytorch.callbacks import LearningRateMonitor
 
 from configs import get_cfg_defaults
 
-from models import build_model
+from models import build_model, replace_LoRA, MonkeyPatchLoRALinear, HieraDPT
 from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
@@ -195,6 +197,8 @@ class L1WithSSIMLoss(nn.Module):
         return self.alpha * ssim_loss.mean() + l1_loss
 
 class LightningDTModel(L.LightningModule):
+    OUTPUT_ORDER = ["depth", "stress_x", "stress_y", "stress_z"]
+    
     def __init__(self, cfg):
         """ MAE Model for training on the DT dataset """
         super(LightningDTModel, self).__init__()
@@ -288,6 +292,10 @@ class LightningDTModel(L.LightningModule):
             
     def training_step(self, batch, batch_idx):
         X, Y = batch 
+        
+        # # force Negative samples to be 0
+        # Y = torch.where(torch.abs(Y) < self.cfg.metric.PN_thresh, torch.zeros_like(Y), Y)
+        
         N, C, H, W = X.shape 
         
         pred, z = self.model(X) 
@@ -312,8 +320,7 @@ class LightningDTModel(L.LightningModule):
         #     loss += (self.criterion(pred[:, i:i+3, :, :], Y[:, i:i+3, :, :]) * betas[idx])
         #     idx += 1
                 
-        loss = self.criterion(pred, Y) + z_loss
-        loss += z_loss
+        loss =  z_loss
         
         # cosine similarity between the predicted and target vectors
         # todo -- have this be between positive vectors
@@ -324,8 +331,35 @@ class LightningDTModel(L.LightningModule):
         loss += (0.0 * cosine_loss) 
         self.log('train/loss', loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
+        total_loss = 0. 
+        predict_dict = self._process_prediction(pred)
+        label_dict = self._process_prediction(Y)
+
+        for name in self.cfg.dataset.output_type:
+            if name == 'depth':
+                loss = self.criterion(predict_dict[name], label_dict[name] * self.cfg.scale)
+
+            else:
+                channels = [f"{name}_{d}" for d in ["x", "y", "z"]]
+                pred_vec = torch.stack([predict_dict[c] for c in channels], dim=1)
+                label_vec = torch.stack([label_dict[c] for c in channels], dim=1)
+
+                loss = self.criterion(pred_vec, label_vec * self.cfg.scale)
+
+            if 'disp' in name:
+                weight = self.cfg.loss.disp_weight
+            elif 'stress' in name:
+                weight = self.cfg.loss.stress_weight
+            elif 'depth' in name:
+                weight = self.cfg.loss.depth_weight
+
+            total_loss += weight * loss
+            self.log(f'train/{name}/loss', weight * loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+
+        # outputs = torch.cat(outputs, dim=1)
+        self.log('train/loss', total_loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
         
-        return {"loss": loss}
+        return {"loss": total_loss}
 
     def reset_validation_stats(self):
         """ resetting stats for val/test """
@@ -338,22 +372,30 @@ class LightningDTModel(L.LightningModule):
             "l1_loss_1": [],
             "l1_loss_2": []
         }
-
-        self.validation_stats["depth"] = dict(NegativeNum=0, FNNum=0, PosNum=0, error_cureve=np.zeros(11), abs_error_curve=np.zeros(11))
+        
+        for name in self.cfg.dataset.output_type:
+            self.validation_stats[name] = dict(NegativeNum=0, 
+                                                FNNum=0, PosNum=0, num_images = 0, mse = 0,
+                                                error_cureve=np.zeros(11), abs_error_curve=np.zeros(11))
     
     def on_validation_epoch_start(self):
         self.reset_validation_stats()
 
     @torch.no_grad()
-    def compute_metric(self, prediction:torch.Tensor, label:torch.Tensor,
-                       PN_thresh: float = 1e-6,
-                       TF_rel_error_rate: float = 0.1,
-                       TF_abs_error_thresh: float = 1e-3,):
+    def compute_metric(self, prediction:torch.Tensor, 
+                       label:torch.Tensor,
+                       PN_thresh:float=1e-6,
+                       TF_rel_error_rate:float=0.1,
+                       TF_abs_error_thresh:float=1e-3):
         """ Compute the prediction metric 
         
         Args:
             prediction: (N, C, H, W)
             label: (N, C, H, W)
+            
+            PN_thresh: threshold for negative samples
+            TF_rel_error_rate: threshold for relative error
+            TF_abs_error_thresh: threshold for absolute error
 
         Returns:
             dict: dictionary of metrics
@@ -368,7 +410,6 @@ class LightningDTModel(L.LightningModule):
         prediction_flatten = prediction.flatten()
         label_flatten = label.flatten()
 
-        num_pixels = label_flatten.shape[0]
         num_bins = self.cfg.metric.num_bins
         interval = TF_rel_error_rate / num_bins
         threshold_ratio = [k * interval for k in range(1, num_bins + 1)]
@@ -403,7 +444,7 @@ class LightningDTModel(L.LightningModule):
             for ratio in threshold_ratio:
                 error_curve.append(torch.sum(rel_error < ratio).item())
 
-            error_curve.append(torch.sum(rel_error > self.cfg.metric.TF_rel_error_rate).item())
+            error_curve.append(torch.sum(rel_error > TF_rel_error_rate).item())
             error_curve = np.array(error_curve)
 
             # compute abs error
@@ -412,7 +453,7 @@ class LightningDTModel(L.LightningModule):
             for thresh in threshold_abs:
                 abs_error_curve.append(torch.sum(abs_error < thresh).item())
 
-            abs_error_curve.append(torch.sum(abs_error > self.cfg.metric.TF_abs_error_thresh).item())
+            abs_error_curve.append(torch.sum(abs_error > TF_abs_error_thresh).item())
             abs_error_curve = np.array(abs_error_curve)
         
         return dict(NegativeNum=NegativeNum, FNNum=FNNum, num_images=prediction.shape[0], mse = self.mse(prediction, label).item(),
@@ -503,8 +544,7 @@ class LightningDTModel(L.LightningModule):
         return dict(NegativeNum=NegativeNum, FNNum=FNNum, num_images=prediction.shape[0], mse = self.mse(prediction, label).item(),
                         PosNum=PosNum, error_cureve=error_curve, abs_error_curve=abs_error_curve)
     
-    
-     def update_metric(self, cumulative_metric_dict:dict, current_step_dict:dict):
+    def update_metric(self, cumulative_metric_dict:dict, current_step_dict:dict):
         for key in ['NegativeNum', 'FNNum', 'PosNum','error_cureve', 'abs_error_curve']:
             cumulative_metric_dict[key] += current_step_dict[key] 
         
@@ -574,39 +614,44 @@ class LightningDTModel(L.LightningModule):
         X, Y = batch 
         N, C, H, W = X.shape 
         
-        pred, z = self.model(X)
+        pred, z = self.model(X) / self.cfg.scale
+        mse = self.mse(pred, Y)
         
         with torch.no_grad():
             # visualize the reconstructed images
-            if batch_idx % 10 == 0:
-                X0 = X[0].detach().clone()
-
-                # gt images
-                gt_deform_color = X0[:3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
-                gt_undeform_color = X0[3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
-                gt_diff_color = X0[[6], :, :].detach().cpu().numpy()
-
-                self.logger.experiment.add_image('gt/deform_color', gt_deform_color, self.global_step)
-                self.logger.experiment.add_image('gt/undeform_color', gt_undeform_color, self.global_step)
-                self.logger.experiment.add_image('gt/diff_color', gt_diff_color, self.global_step)
+            # visualize first y and pred
+            if batch_idx % 10 == 0 and name == "test":
+                for i in range(N):
+                    X0 = X[i].detach().clone()
+                    gt_def = X0[:3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
+                    gt_undef = X0[3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
+                    gt_diff = X0[[6], :, :].detach().cpu().numpy()
+                    
+                    self.logger.experiment.add_image(f'{name}/gt/deform_color_{i}', gt_def, self.global_step)
+                    self.logger.experiment.add_image(f'{name}/gt/undeform_color_{i}', gt_undef, self.global_step)
+                    self.logger.experiment.add_image(f'{name}/gt/diff_color_{i}', gt_diff, self.global_step)
+                    
+                    gt_depth = Y[i].detach().clone()
+                    gt_depth = gt_depth.cpu().numpy()
+                    
+                    pred_depth = pred[i].detach().clone()
+                    pred_depth = pred_depth.cpu().numpy()
                 
-                # visualize the prediction and Y
-                pred_output = pred[0].detach().clone()
-                pred_output = pred_output.cpu().numpy()
-                gt_output = Y[0].detach().clone()
-                gt_output = gt_output.cpu().numpy()
-                
-                outputs = ['displacement', 'normal force', 'stress1']
-                
-                for i, output in enumerate(outputs):
-                    # go through
-                    for j in range(3):
-                        idx = i * 3 + j
-                        pred_output_colored = apply_colormap(pred_output[idx])
-                        gt_output_colored = apply_colormap(gt_output[idx])
-                        self.logger.experiment.add_image(f'val/pred_{output}_colored_{j}', pred_output_colored, self.global_step, dataformats='HWC')
-                        self.logger.experiment.add_image(f'val/gt_{output}_colored_{j}', gt_output_colored, self.global_step, dataformats='HWC')
+                    # plot both
+                    fig, axes = plt.subplots(2, len(self.output_names), figsize=(20, 10))
 
+                    pred_ax = axes[0]
+                    for name, ax, p in zip(self.output_names, pred_ax, pred_depth):
+                        ax.imshow(p)
+                        ax.set_title(name)
+                    
+                    gt_ax = axes[1]
+                    for name, ax, g in zip(self.output_names, gt_ax, gt_depth):
+                        ax.imshow(g)
+                        ax.set_title(name)
+
+                    fig.savefig(osp.join(self.logger.save_dir, f"{name}_prediction_{batch_idx}_{i}.png"))
+                plt.close(fig)
         
         mse = self.mse(pred, Y)
         
@@ -630,8 +675,27 @@ class LightningDTModel(L.LightningModule):
         self.log(f'{name}/mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         self.validation_stats["mse"].append(mse.item())
 
-        depth_metric_dict = self.compute_metric(pred[:, 0, :, :], Y[:, 0, :, :])
-        self.update_metric(self.validation_stats["depth"], depth_metric_dict)
+        predict_dict, label_dict = self._process_prediction(pred), self._process_prediction(Y)
+
+        # compute force metric
+        for name in self.cfg.dataset.output_type:
+            if name == 'depth':
+                metric_dict = self.compute_metric(predict_dict[name], label_dict[name],
+                                                  PN_thresh=self.cfg.metric.PN_thresh,
+                                                  TF_rel_error_rate=self.cfg.metric.TF_rel_error_rate,
+                                                  TF_abs_error_thresh=self.cfg.metric.TF_abs_error_thresh)
+            else:
+                channels = [f"{name}_{d}" for d in ["x", "y", "z"]]
+                pred_vec = torch.stack([predict_dict[c] for c in channels], dim=1)
+                label_vec = torch.stack([label_dict[c] for c in channels], dim=1)
+
+                # compute vector metric
+                metric_dict = self.compute_metric_vector(pred_vec, label_vec,
+                                                        PN_thresh=self.cfg.metric.PN_thresh,
+                                                        TF_rel_error_rate=self.cfg.metric.TF_rel_error_rate,
+                                                        TF_abs_error_thresh=self.cfg.metric.TF_abs_error_thresh)
+                
+            self.update_metric(self.validation_stats[name], metric_dict)
 
     def validation_step(self, batch, batch_idx):
         self._run_val_test_step(batch, batch_idx, name="val")
@@ -778,14 +842,14 @@ class LightningDTModel(L.LightningModule):
             stats["fig"].savefig(osp.join(self.logger.save_dir, "test_error_curve.png"))
             
     def configure_optimizers(self):
-        if len(self.cfg.model.pretrained_model) > 0 :
-            print("Freezing encoder when loading from pretrained model")
-            self.model.freeze_encoder()
-
-        if self.cfg.optimizer.name == "Adam":
-            optimizer = optim.Adam([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
-        elif self.cfg.optimizer.name == "AdamW":
-            optimizer = optim.AdamW([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
+        
+        if isinstance(self.model, HieraDPT):
+            optimizer = self.model.configure_optimizers(self.cfg)
+        else:
+            if self.cfg.optimizer.name == "Adam":
+                optimizer = optim.Adam([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
+            elif self.cfg.optimizer.name == "AdamW":
+                optimizer = optim.AdamW([p for p in self.model.parameters() if p.requires_grad], lr=self.cfg.optimizer.lr)
 
         opt_config = dict(optimizer = optimizer)
         
@@ -809,6 +873,8 @@ if __name__ == '__main__':
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/dt_vit.yaml")
+    arg.add_argument('--logger', type=str, default="wandb")
+    arg.add_argument('--dataset_dir', type=str, default="../Documents/Dataset/sim_dataset")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
     arg.add_argument('--match_features_from_encoders', action='store_true')
@@ -832,9 +898,8 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
     
-    
-    dataset = FullDataset(transform=transform, samples_dir=cfg.dataset.dataset_path,
-                          output_type=cfg.dataset.output_type, is_real_world=opt.real_world)
+    dataset = FullDataset(cfg, transform=transform, 
+                          samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
@@ -854,7 +919,14 @@ if __name__ == '__main__':
 
     calibration_model = LightningDTModel(cfg)
 
-    logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
+    # get date
+    date = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    name = "{}-{}".format(opt.exp_name.split("/")[-1], date)
+   
+    if opt.logger == "tensorboard":
+        logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
+    if opt.logger == "wandb":
+        logger = WandbLogger(project="DenseTact", name=name, config=cfg)
     
     if opt.logger == "tensorboard":
         logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")

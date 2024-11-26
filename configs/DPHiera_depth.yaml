@@ -1,6 +1,5 @@
-dataset_ratio: 0.4
-batch_size: 64
-scale: 1000.
+dataset_ratio: 1.0
+batch_size: 96
 
 model:
   name: HieraDPT
@@ -8,10 +7,8 @@ model:
   pretrained_model: "exp/Hiera2_MAE/checkpoints/last.ckpt"
 
   hiera:
-    decoder: "Vanilla"
+    use_bn: True
     decoder_embed_dim: 512
-    decoder_num_heads: 16
-    decoder_depth: 8
 
 dataset:
   output_type: "depth"

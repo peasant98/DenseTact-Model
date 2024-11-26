@@ -1,11 +1,12 @@
-dataset_ratio: 0.4
-batch_size: 64
-scale: 1000.
+dataset_ratio: 1.0
+# 32 ~ 5 GB GPU
+batch_size: 96
+scale: 1.
 
 model:
   name: HieraDPT
-  out_chans: 1
-  pretrained_model: "exp/Hiera2_MAE/checkpoints/last.ckpt"
+  out_chans: [3]
+  pretrained_model: "exp/HieraRealMAE/checkpoints/last.ckpt"
 
   hiera:
     decoder: "Vanilla"
@@ -14,7 +15,7 @@ model:
     decoder_depth: 8
 
 dataset:
-  output_type: "depth"
+  output_type: ["disp"]
 
 optimizer:
   name: AdamW

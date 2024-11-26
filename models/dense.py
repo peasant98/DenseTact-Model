@@ -126,6 +126,20 @@ class DecoderBlock(nn.Module):
                 nn.BatchNorm2d(out_channels),
                 nn.LeakyReLU(inplace=True)
             )
+
+        self.apply(self.init_weights)
+    
+    @torch.no_grad()
+    def init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+        elif isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
         
     def forward(self, x, skip=None):
         x = self.upsample(x)
@@ -178,8 +192,9 @@ class FullDecoder(nn.Module):
                                              decoder_output_dim[i - 1]))
         
         # no concatenation in the last layer
-        self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1]))
         # self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1], decoder_output_dim[-1]))
+        # [Deprecated] Use the following line instead of the above line for old weights
+        self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1])) # , decoder_output_dim[-1]))
         
         # use decoder 
         if decoder_N_head_info is not None:
@@ -329,6 +344,7 @@ class DTNet(nn.Module):
         if cfg.model.encoder == 'densenet':
             self.encoder = DensenetEncoder(cfg)
             # remove classifier layer
+            # [Deprecated] comment the following line for old weights
             del self.encoder.encoder.classifier
         # resnet series
         elif cfg.model.encoder == 'resnet':
@@ -342,7 +358,7 @@ class DTNet(nn.Module):
         self.decoders = nn.ModuleList()
         # start with 1024 features in decoder
         out_chans = [cfg.model.out_chans] if isinstance(cfg.model.out_chans, int) else cfg.model.out_chans
-        self.decoder_features = 1024 + 512
+        self.decoder_features = 1024
         for head_output_channels in out_chans:
             # Decoder: Using a custom decoder
             self.decoders.append(FullDecoder(encoder_features, self.decoder_features, 
@@ -403,3 +419,4 @@ if __name__ == "__main__":
     with torch.no_grad():
         outputs = model(dummy_input)
         
+    print(outputs.shape)

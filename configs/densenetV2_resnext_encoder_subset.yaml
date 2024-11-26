@@ -3,8 +3,8 @@ dataset_ratio: 0.4
 model:
   name: DenseNetV2
   out_chans: 1
-  encoder: "densenet"
-  backbone: "densenet161"
+  encoder: resnext
+  backbone: resnext101_32x8d
 
 dataset:
   output_type: "depth"

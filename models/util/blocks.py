@@ -141,7 +141,6 @@ class FeatureFusionBlock(nn.Module):
             modifier = {"size": size}
 
         output = nn.functional.interpolate(output, **modifier, mode="bilinear", align_corners=self.align_corners)
-        
         output = self.out_conv(output)
 
         return output
