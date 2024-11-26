@@ -162,7 +162,7 @@ class MaskedAutoencoderHiera(Hiera):
         return label
 
     def get_pixel_label_3d(
-        self, input_vid: torch.Tensor, mask: torch.Tensor, norm: bool = True
+        self, input_vid: torch.Tensor, mask: torch.Tensor, norm: bool = False
     ) -> torch.Tensor:
         # mask (boolean tensor): True must correspond to *masked*
 

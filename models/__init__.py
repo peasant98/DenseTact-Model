@@ -28,6 +28,8 @@ def build_model(cfg):
         model = DTNet(cfg)
     elif cfg.model.name == "HieraDPT":
         model = HieraDPT(cfg)
+    elif cfg.model.name == "DinoV2":
+        pass
     else:
         raise NotImplementedError("Model not implemented {}".format(cfg.model.name))
 

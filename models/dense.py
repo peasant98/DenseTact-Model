@@ -81,6 +81,32 @@ class DecoderHead(nn.Module):
     def forward(self, x):
         x = self.conv1(x)
         return x    
+
+class DecoderNHead(nn.Module):
+    """Decoder head module for n heads."""
+    def __init__(self, in_chans=64, heads=5, channels_per_head=3):
+        super(DecoderNHead, self).__init__()
+        
+        # Calculate the output channels based on the number of heads and channels per head
+        self.output_channels = heads * channels_per_head
+        
+        # Create multiple convolutions for each head
+        self.convs = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(in_chans, 32, kernel_size=3, padding=1),
+                nn.LeakyReLU(inplace=True),
+                nn.Conv2d(32, 16, kernel_size=3, padding=1),
+                nn.LeakyReLU(inplace=True),
+                nn.Conv2d(16, channels_per_head, kernel_size=3, padding=1)
+            ) 
+            for _ in range(heads)
+        ])
+        
+    def forward(self, x):
+        # Apply each convolution and concatenate their outputs along the channel dimension
+        outputs = [conv(x) for conv in self.convs]
+        return torch.cat(outputs, dim=1)
+    
     
 class DecoderBlock(nn.Module):
     """Decoder block module using Upsampling and Convolution."""
@@ -90,16 +116,15 @@ class DecoderBlock(nn.Module):
         self.conv1 = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True)
+            nn.LeakyReLU(inplace=True)
         )
         
         self.conv2 = None
-        
         if out_channels is not None:
             self.conv2= nn.Sequential(
                 nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1),
                 nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True)
+                nn.LeakyReLU(inplace=True)
             )
         
     def forward(self, x, skip=None):
@@ -110,7 +135,7 @@ class DecoderBlock(nn.Module):
         
         if self.conv2 is not None:
             x = self.conv2(x)
-        
+            
         return x
         
     def _interpolate(self, enc_ftrs, x):
@@ -129,7 +154,7 @@ class ResizeConv(nn.Module):
 class FullDecoder(nn.Module):
     def __init__(self, encoder_num_features, decoder_features,
                         decoder_mid_dim, decoder_output_dim,
-                        output_channels=1):
+                        output_channels=1, decoder_N_head_info={'heads': 1, 'channels_per_head': 3}):
         """
         Full Decoder of DenseNet
         encoder_num_features List[int]: number of features from the encoder, from deep to shallow 
@@ -156,7 +181,11 @@ class FullDecoder(nn.Module):
         self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1]))
         # self.decoder.append(DecoderBlock(decoder_output_dim[-2], decoder_mid_dim[-1], decoder_output_dim[-1]))
         
-        self.head = DecoderHead(decoder_output_dim[-1], output_channels)
+        # use decoder 
+        if decoder_N_head_info is not None:
+            self.head = DecoderNHead(decoder_output_dim[-1], **decoder_N_head_info)
+        else:
+            self.head = DecoderHead(decoder_output_dim[-1], output_channels)
         
     def forward(self, x, skip_connections):
         x = self.conv_resize(x)
@@ -324,6 +353,13 @@ class DTNet(nn.Module):
         # Densenet Encoder
         x1, x2, x3, x4, x5 = self.encoder(x)
         
+        # for student teacher training, we will supervise the encoder output z
+        z = x5
+        
+        # if decoders are none, return the encoder output
+        if getattr(self, 'decoders', None) is None:
+            return z
+        
         # Decoder
         # go through each decoder
         outputs = []
@@ -334,7 +370,7 @@ class DTNet(nn.Module):
         # (B, head_output_channels x n_heads output, H, W)
         outputs = torch.cat(outputs, dim=1)
         
-        return outputs
+        return outputs, z
     
     
 if __name__ == "__main__":

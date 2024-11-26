@@ -151,7 +151,7 @@ if __name__ == '__main__':
     
     dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers)
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=True, num_workers=12)
-
+    
     calibration_model = LightningDTModel(
         model_name=opt.model, 
         num_epochs=opt.epochs,

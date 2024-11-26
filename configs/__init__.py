@@ -3,7 +3,7 @@ from yacs.config import CfgNode as CN
 # Define the default configuration using YACS CfgNode
 cfg = CN()
 
-cfg.epochs = 100
+cfg.epochs = 200
 cfg.batch_size = 16
 cfg.num_workers = 16
 cfg.dataset_ratio = 1.
@@ -56,7 +56,7 @@ cfg.dataset.dataset_path = "data"
 
 cfg.optimizer = CN()
 cfg.optimizer.name = "Adam"
-cfg.optimizer.lr = 1e-3
+cfg.optimizer.lr = 1e-4
 cfg.optimizer.eta_min = 1e-6
 
 cfg.scheduler = CN()

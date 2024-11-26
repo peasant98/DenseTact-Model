@@ -41,6 +41,15 @@ NAME_TO_RGB_MAPPINGS = {
     'CNAREA': ('CNAREA', 'CSHEAR1', 'CSHEAR2'),
 }
 
+FEAT_CHANNEL = {
+    "depth": 1, 
+    "disp": 3,
+    "stress1": 3,
+    "stress2": 3,
+    "shear": 3,
+    "cnorm": 3
+}
+
 MAX = 0
 MIN = 0
 
@@ -390,6 +399,10 @@ class FullDataset(Dataset):
         
         length = sum(os.path.isdir(os.path.join(self.samples_dir, name)) for name in os.listdir(self.samples_dir)) / 2
         
+        # augment data with rotations by 90 degrees
+        
+        self.length = int(length)
+        
         return int(length)
     
     def read_image(self, image_path):
@@ -423,7 +436,12 @@ class FullDataset(Dataset):
         
     def __getitem__(self, idx):
         """Get item in dataset. Will get either depth or whole output suite"""
+        
+        sample_num = int((idx % (self.length / 4)) + 1)
+        augmentation_num = int((idx // (self.length / 4)))
         sample_num = idx + 1
+        
+        
         # read deformed and undeformed images
         deformed_img_norm = cv2.imread(f'{self.samples_dir}/X{sample_num}/deformed.png')
         undeformed_img_norm = cv2.imread(f'{self.samples_dir}/X{sample_num}/undeformed.png')
@@ -505,11 +523,29 @@ class FullDataset(Dataset):
             
             area_shear = area_shear * self.output_mask[:,:,np.newaxis]
             
-            # data = (cnorm, stress1, stress2, displacement, area_shear)
-            data = (area_shear)
+            # for area shear, perform the following sequence on the first channel
             
-            # data = np.concatenate(data, axis=2)
-            # data = 20 * data
+            # get rid of below 0 values
+            area_shear[area_shear[:, :, 0] < 0, 0] = 0 
+            
+            # rotate all inputs and outputs by 90 degrees
+            # if augmentation_num > 0:
+            #     deformed_img_norm = np.rot90(deformed_img_norm, k=augmentation_num)
+            #     undeformed_img_norm = np.rot90(undeformed_img_norm, k=augmentation_num)
+            #     image_diff = np.rot90(image_diff, k=augmentation_num)
+            
+            #     cnorm = np.rot90(cnorm, k=augmentation_num)
+            #     stress1 = np.rot90(stress1, k=augmentation_num)
+            #     stress2 = np.rot90(stress2, k=augmentation_num)
+            #     displacement = np.rot90(displacement, k=augmentation_num)
+            #     area_shear = np.rot90(area_shear, k=augmentation_num)
+                            
+            
+            # data = (displacement)
+            data = (displacement, cnorm, stress1)
+            
+            
+            data = np.concatenate(data, axis=2)
             y = data
 
             # apply transform
@@ -622,6 +658,8 @@ if __name__ == '__main__':
     
     dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
                           root_dir=root_dir, is_real_world=is_real_world, output_type='full')
+    
+    print()
     full_max = 0
     full_min = 0
     
@@ -629,12 +667,13 @@ if __name__ == '__main__':
     for i in (idxes):
         X, y = dataset[i]
         
-        # shape of y is 3 by 256 by 256
         y = y.permute(1, 2, 0).numpy()
-        # only show the first channel
+        # visualize first channel
         plt.imshow(y[:,:,0])
         plt.show()
-    
+        
+        # shape of y is 3 by 256 by 256
+
     
     # dataset.construct_dataset()
     
