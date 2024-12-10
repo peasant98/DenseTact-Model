@@ -23,6 +23,9 @@ from models import pretrain_dict
 from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
+from configs import get_cfg_defaults
+
+
 class LightningDTModel(L.LightningModule):
     def __init__(self, 
                  model_name='base', 
@@ -120,8 +123,9 @@ class LightningDTModel(L.LightningModule):
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
-    arg.add_argument('--dataset_dir', type=str, default="./output")
-    arg.add_argument('--epochs', type=int, default=150)
+    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
+    arg.add_argument('--epochs', type=int, default=200)
+    arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
     arg.add_argument('--gpus', type=int, default=1)
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=32)
@@ -129,7 +133,12 @@ if __name__ == '__main__':
     arg.add_argument('--mask_ratio', type=float, default=0.75)
     arg.add_argument('--exp_name', type=str, default="exp/DT_Model")
     arg.add_argument('--ckpt_path', type=str, default=None)
+    arg.add_argument('--real_world', action='store_true')
+    
     opt = arg.parse_args()
+    
+    cfg = get_cfg_defaults()
+    cfg.merge_from_file(opt.config)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -138,7 +147,7 @@ if __name__ == '__main__':
         transforms.Resize((256, 256), antialias=True),
     ])
     
-    dataset = FullDataset(transform=transform, output_type='none', samples_dir=opt.dataset_dir)
+    dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
 

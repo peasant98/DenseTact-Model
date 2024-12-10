@@ -104,6 +104,7 @@ class DecoderNHead(nn.Module):
         
     def forward(self, x):
         # Apply each convolution and concatenate their outputs along the channel dimension
+        
         outputs = [conv(x) for conv in self.convs]
         return torch.cat(outputs, dim=1)
     
@@ -113,6 +114,11 @@ class DecoderBlock(nn.Module):
     def __init__(self, in_channels, mid_channels, out_channels=None):
         super(DecoderBlock, self).__init__()
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+        # use ct2d instead of convtranspose2d
+        # self.upsample = nn.ConvTranspose2d(mid_channels, mid_channels, kernel_size=2, stride=2)
+        # if out_channels is None:
+        #     self.upsample = nn.ConvTranspose2d(in_channels, in_channels, kernel_size=2, stride=2)
+            
         self.conv1 = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(mid_channels),
@@ -186,7 +192,6 @@ class FullDecoder(nn.Module):
                 decoder_input_dim = decoder_features + encoder_num_features[i]
             else:
                 decoder_input_dim = decoder_output_dim[i - 2] + encoder_num_features[i]
-            
             self.decoder.append(DecoderBlock(decoder_input_dim,
                                              decoder_mid_dim[i - 1],
                                              decoder_output_dim[i - 1]))
@@ -357,7 +362,8 @@ class DTNet(nn.Module):
         
         self.decoders = nn.ModuleList()
         # start with 1024 features in decoder
-        out_chans = [cfg.model.out_chans] if isinstance(cfg.model.out_chans, int) else cfg.model.out_chans
+        out_chans = [cfg.model.out_chans[0]]
+
         self.decoder_features = 1024
         for head_output_channels in out_chans:
             # Decoder: Using a custom decoder
@@ -387,6 +393,15 @@ class DTNet(nn.Module):
         outputs = torch.cat(outputs, dim=1)
         
         return outputs, z
+    
+    # def load_from_pretrained_model(self, model_path:str):
+    #     model_state = torch.load(model_path)
+    #     encoder_state_dict = {k: v for k, v in model_state["state_dict"].items() if k.startswith("model.encoder.")}
+        
+    #     calibration_model_state_dict = calibration_model.state_dict()
+    #     calibration_model_state_dict.update(encoder_state_dict)
+    #     calibration_model.load_state_dict(calibration_model_state_dict)
+
     
     
 if __name__ == "__main__":

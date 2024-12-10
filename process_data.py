@@ -478,9 +478,11 @@ class FullDataset(Dataset):
 
         data_pack = []
 
-        # load bounds json
-        with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
-            bounds = json.load(f)
+        # load bounds json only if it exists
+        bounds_exists = os.path.exists(f'{self.samples_dir}/y{sample_num}/bounds.json')
+        if bounds_exists:
+            with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
+                bounds = json.load(f)
 
         for t in self.output_type:
            
@@ -552,7 +554,7 @@ class FullDataset(Dataset):
             y = np.concatenate(data_pack, axis=2) # (H, W, C)
             H, W, _ = y.shape
 
-            if self.opt.dataset.contiguous_on_direction:
+            if self.opt is not None and self.opt.dataset.contiguous_on_direction:
                 if "depth" in self.output_type:
                     depth = y[:, :, [0]]
                     directions = y[:, :, 1:]
