@@ -12,6 +12,7 @@ import matplotlib as mpl
 import wandb
 import datetime
 
+import numpy as np
 from matplotlib import pyplot as plt
 import torch
 import torch.nn as nn
@@ -26,6 +27,8 @@ from torchmetrics.functional import structural_similarity_index_measure
 
 
 import lightning as L
+from lightning.pytorch.loggers import TensorBoardLogger
+
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 
@@ -209,6 +212,8 @@ class LightningDTModel(L.LightningModule):
         if len(self.cfg.model.pretrained_model) > 0:
             print("Load pretrained model")
             self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)   
+            
+            # todo: see if we need to freeze encoder
             self.model.freeze_encoder()
         
             # use LoRA finetune
@@ -228,7 +233,7 @@ class LightningDTModel(L.LightningModule):
         
         # get channel information
         total_output_channels = sum(self.cfg.model.out_chans)
-        dataset_output_-type - cfg.dataset.output_type
+        dataset_output_type = cfg.dataset.output_type
         expected_output_channels = sum([FEAT_CHANNEL[t] for t in dataset_output_type])
         
         assert total_output_channels == expected_output_channels, \
@@ -271,65 +276,68 @@ class LightningDTModel(L.LightningModule):
         self.student_encoders = student_encoders
     
     def on_train_start(self):
-        # only load pre-trained model at the first epoch
-        if len(self.cfg.model.pretrained_model) > 0 and self.trainer.current_epoch == 0:
+        # only load pre-trained model at the first epoch and if lora is not used
+        if len(self.cfg.model.pretrained_model) > 0 and self.trainer.current_epoch == 0 and not self.cfg.model.LoRA:
             print("Load pretrained model")
             self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)
         
-        for student_encoder in self.student_encoders:
-            student_encoder.eval().to(next(self.model.parameters()).device)
+        # set if student encoders are available
+        if hasattr(self, "student_encoders"):
+            for student_encoder in self.student_encoders:
+                student_encoder.eval().to(next(self.model.parameters()).device)
 
     def on_train_epoch_start(self):
         """ 
         I decide to always freeze the encoder when loading from a pretrained model 
         If you want to finetune the encoder, you can load from a checkpoint and set the pretrained_model to ""
         """
-        if len(self.cfg.model.pretrained_model) > 0 :
+        epoch = self.current_epoch
+        if len(self.cfg.model.pretrained_model) > 0 and epoch < 50:
             print("Freezing encoder when loading from pretrained model")
             self.model.freeze_encoder()
+        else:
+            # unfreeze the encoder
+            print("Unfreezing encoder")
+            self.model.unfreeze_encoder()
             # else:
-            #     self.model.unfreeze_encoder()
+            # self.model.unfreeze_encoder()
             
     def training_step(self, batch, batch_idx):
         X, Y = batch 
         
+        # get epoch
+        
         # # force Negative samples to be 0
         # Y = torch.where(torch.abs(Y) < self.cfg.metric.PN_thresh, torch.zeros_like(Y), Y)
-        
         N, C, H, W = X.shape 
         
-        pred, z = self.model(X) 
+        if self.cfg.model.encoder == "densenet":
+            pred, z = self.model(X)
+        else:
+            pred = self.model(X) 
         
         # get the output of each encoder
         z_loss = 0
-        # if hasattr(self, "student_encoders"):
-        #     for student_encoder in self.student_encoders:
-        #         student_z = student_encoder(X)
+        if hasattr(self, "student_encoders"):
+            for student_encoder in self.student_encoders:
+                student_z = student_encoder(X)
                 
-        #         # get a combination of smooth L1 loss and cosine similarity
-        #         cosine_loss = (1 - F.cosine_similarity(student_z, z, dim=1).mean())
-        #         smooth_l1_loss = self.smooth_l1_loss(student_z, z)
+                # get a combination of smooth L1 loss and cosine similarity
+                cosine_loss = (1 - F.cosine_similarity(student_z, z, dim=1).mean())
+                smooth_l1_loss = self.smooth_l1_loss(student_z, z)
                 
-        #         # get l1 loss between student_pred and z
-        #         z_loss += 0.1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
+                # get l1 loss between student_pred and z
+                z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
                 
-        # compute loss os weighted for every 3 channels wrt output
-        # idx = 0
-        # betas = [1, 1, 5]
-        # for i in range(0, 9, 3):
-        #     loss += (self.criterion(pred[:, i:i+3, :, :], Y[:, i:i+3, :, :]) * betas[idx])
-        #     idx += 1
-                
-        loss =  z_loss
-        
+        loss = z_loss
         # cosine similarity between the predicted and target vectors
         # todo -- have this be between positive vectors
-        cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
-        # compute one scalar value for the cosine similarity
-        cosine_similarity = torch.mean(cosine_similarity_group)
-        cosine_loss = 1 - cosine_similarity
-        loss += (0.0 * cosine_loss) 
-        self.log('train/loss', loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        # cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
+        # # compute one scalar value for the cosine similarity
+        # cosine_similarity = torch.mean(cosine_similarity_group)
+        # cosine_loss = 1 - cosine_similarity
+        # loss += (0 * cosine_loss) 
+        # self.log('train/loss', loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         total_loss = 0. 
         predict_dict = self._process_prediction(pred)
@@ -337,7 +345,17 @@ class LightningDTModel(L.LightningModule):
 
         for name in self.cfg.dataset.output_type:
             if name == 'depth':
-                loss = self.criterion(predict_dict[name], label_dict[name] * self.cfg.scale)
+                
+                # if the label_dict is below a very small threshold, have the loss be weighted small
+                loss = 0
+                for item in label_dict[name]:
+                    # weight is based on the max value of the label
+                    if torch.abs(item).max() > 0.01:
+                        loss += 100 * self.criterion(predict_dict[name], label_dict[name] * self.cfg.scale)
+                    else:
+                        loss += 1 * self.criterion(predict_dict[name], label_dict[name] * self.cfg.scale)
+                
+                # loss = self.criterion(predict_dict[name], label_dict[name] * self.cfg.scale)
 
             else:
                 channels = [f"{name}_{d}" for d in ["x", "y", "z"]]
@@ -354,10 +372,9 @@ class LightningDTModel(L.LightningModule):
                 weight = self.cfg.loss.depth_weight
 
             total_loss += weight * loss
-            self.log(f'train/{name}/loss', weight * loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+            self.log(f'train/{name}/loss', weight * loss / self.cfg.scale, on_step=True, on_epoch=True, prog_bar=False, logger=True)
 
-        # outputs = torch.cat(outputs, dim=1)
-        self.log('train/loss', total_loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('train/loss', total_loss / self.cfg.scale , on_step=True, on_epoch=True, prog_bar=True, logger=True)
         
         return {"loss": total_loss}
 
@@ -370,7 +387,8 @@ class LightningDTModel(L.LightningModule):
             "cosine_sim_2": [],
             "l1_loss_0": [],
             "l1_loss_1": [],
-            "l1_loss_2": []
+            "l1_loss_2": [],
+            "mean_ssim": [],
         }
         
         for name in self.cfg.dataset.output_type:
@@ -608,13 +626,25 @@ class LightningDTModel(L.LightningModule):
 
         return mean_l1_loss_per_group
     
+    def _process_prediction(self, prediction:torch.Tensor) -> dict:
+        """ Process the prediction and label for computing the metric """
+        output = dict()
+        for idx in range(len(self.output_names)):
+            output[self.output_names[idx]] = prediction[:, idx, :, :]
+        
+        return output
     
     def _run_val_test_step(self, batch, batch_idx, name="val"):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
         X, Y = batch 
         N, C, H, W = X.shape 
         
-        pred, z = self.model(X) / self.cfg.scale
+        # if model is densenet, get the z value
+        if self.cfg.model.encoder == "densenet":
+            pred, z = self.model(X)
+        else: 
+            pred = self.model(X)
+            
         mse = self.mse(pred, Y)
         
         with torch.no_grad():
@@ -641,11 +671,17 @@ class LightningDTModel(L.LightningModule):
                     fig, axes = plt.subplots(2, len(self.output_names), figsize=(20, 10))
 
                     pred_ax = axes[0]
+                    
+                    # if pred_ax is a single axis, make it a list
+                    # if type(pred_ax) != list or type(pred_ax) != np.ndarray:
+                    #     pred_ax = [pred_ax]
                     for name, ax, p in zip(self.output_names, pred_ax, pred_depth):
                         ax.imshow(p)
                         ax.set_title(name)
                     
                     gt_ax = axes[1]
+                    # if type(gt_ax) != list or type(gt_ax) != np.ndarray:
+                    #     gt_ax = [gt_ax]
                     for name, ax, g in zip(self.output_names, gt_ax, gt_depth):
                         ax.imshow(g)
                         ax.set_title(name)
@@ -654,33 +690,47 @@ class LightningDTModel(L.LightningModule):
                 plt.close(fig)
         
         mse = self.mse(pred, Y)
+        mse /= self.cfg.scale
         
         # get cosine similarity for each vector
         # todo -- this won't work with zero vectors, make sure to fix this! 
-        cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
+        # cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
         
-        # compute l1 loss for each vector
-        l1_loss_group = self.compute_mean_l1_loss_per_group(pred, Y)
+        # # compute l1 loss for each vector
+        # l1_loss_group = self.compute_mean_l1_loss_per_group(pred, Y)
         
-        # for each item, log the cosine similarity and l1 loss
-        for i, (cosine_sim, l1_loss) in enumerate(zip(cosine_similarity_group, l1_loss_group)):
-            self.log(f'{name}/cosine_sim_{i}', cosine_sim.item(), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log(f'{name}/l1_loss_{i}', l1_loss.item(), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        # # for each item, log the cosine similarity and l1 loss
+        # for i, (cosine_sim, l1_loss) in enumerate(zip(cosine_similarity_group, l1_loss_group)):
+        #     self.log(f'{name}/cosine_sim_{i}', cosine_sim.item(), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        #     self.log(f'{name}/l1_loss_{i}', l1_loss.item(), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
             
-            # add to the validation stats
-            self.validation_stats[f"cosine_sim_{i}"].append(cosine_sim.item())
-            self.validation_stats[f"l1_loss_{i}"].append(l1_loss.item())
+        #     # add to the validation stats
+        #     self.validation_stats[f"cosine_sim_{i}"].append(cosine_sim.item())
+        #     self.validation_stats[f"l1_loss_{i}"].append(l1_loss.item())
+            
+        # compute ssim per channel
+        ssim_per_channel = []
+        for i in range(len(pred[0])):
+            ssim_val = structural_similarity_index_measure(pred[:, i, :, :].unsqueeze(1), Y[:, i, :, :].unsqueeze(1))
+            # get item_value
+            ssim_per_channel.append(ssim_val.item())
+            
+        # get the mean ssim
+        mean_ssim = np.mean(ssim_per_channel)
         
-        # outputs = torch.cat(outputs, dim=1)
+        self.validation_stats["mean_ssim"].append(mean_ssim)
+        
+        # compute lpips
+        
         self.log(f'{name}/mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         self.validation_stats["mse"].append(mse.item())
 
         predict_dict, label_dict = self._process_prediction(pred), self._process_prediction(Y)
-
+        
         # compute force metric
         for name in self.cfg.dataset.output_type:
             if name == 'depth':
-                metric_dict = self.compute_metric(predict_dict[name], label_dict[name],
+                metric_dict = self.compute_metric(predict_dict[name] / (self.cfg.scale / 10), label_dict[name] / (self.cfg.scale / 10),
                                                   PN_thresh=self.cfg.metric.PN_thresh,
                                                   TF_rel_error_rate=self.cfg.metric.TF_rel_error_rate,
                                                   TF_abs_error_thresh=self.cfg.metric.TF_abs_error_thresh)
@@ -707,6 +757,12 @@ class LightningDTModel(L.LightningModule):
 
         psnr = 10 * np.log10(1.0 / avg_mse)
         self.log(f'{name}_psnr', psnr, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        
+        avg_ssim = np.mean(self.validation_stats["mean_ssim"])
+        avg_ssim = np.mean(avg_ssim)
+        self.log(f'{name}/avg_ssim', avg_ssim, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        
+        # compute the ssim for the outputs
 
         if dist.is_initialized():
             # summarize the results from multiple GPUs
@@ -866,28 +922,52 @@ class LightningDTModel(L.LightningModule):
 
         return opt_config
 
+def construct_student_encoders(encoder_paths, calibration_model):
+    student_encoders = []
+    for encoder_path in encoder_paths:
+        model_state = torch.load(encoder_path)
+        
+        encoder_state_dict = {k: v for k, v in model_state["state_dict"].items() if k.startswith("model.encoder.")}
+        
+        calibration_model_copy = deepcopy(calibration_model)
+        
+        calibration_model_state_dict = calibration_model_copy.state_dict()
+        calibration_model_state_dict.update(encoder_state_dict)
+        calibration_model_copy.load_state_dict(calibration_model_state_dict)
+        
+        # create copy of calibration model, delete the decoders, use z vector
+        decoder_N_head_info = {'heads': 1, 'channels_per_head': 3}
+        head = DecoderNHead(64, **decoder_N_head_info)
+        calibration_model_copy.model.decoders[0].head = head
+        
+        del calibration_model_copy.model.decoders
+        # move to cuda
+        calibration_model_copy.model.to(device)
+        student_encoders.append(calibration_model_copy.model)
+    return student_encoders
 
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
-    arg.add_argument('--gpus', type=int, default=6)
+    arg.add_argument('--gpus', type=int, default=4)
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
-    arg.add_argument('--config', type=str, default="configs/dt_vit.yaml")
-    arg.add_argument('--logger', type=str, default="wandb")
-    arg.add_argument('--dataset_dir', type=str, default="../Documents/Dataset/sim_dataset")
+    arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
+    arg.add_argument('--logger', type=str, default="tensorboard")
+    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
     arg.add_argument('--match_features_from_encoders', action='store_true')
     arg.add_argument('--encoder_paths', nargs='+', type=str, help="List of encoder paths")
     arg.add_argument('--real_world', action='store_true')
     opt = arg.parse_args()
-
+    
+    
     # load config
     cfg = get_cfg_defaults()
     cfg.merge_from_file(opt.config)
     # copy config file
     os.makedirs(opt.exp_name, exist_ok=True)
-
+    
     if opt.config != osp.join(opt.exp_name, 'config.yaml'):
         shutil.copy(opt.config, osp.join(opt.exp_name, 'config.yaml'))
 
@@ -903,7 +983,7 @@ if __name__ == '__main__':
     
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
-
+    
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
     train_size = int(0.7 * dataset_length)
     test_size = dataset_length - train_size
@@ -923,11 +1003,6 @@ if __name__ == '__main__':
     date = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     name = "{}-{}".format(opt.exp_name.split("/")[-1], date)
    
-    if opt.logger == "tensorboard":
-        logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
-    if opt.logger == "wandb":
-        logger = WandbLogger(project="DenseTact", name=name, config=cfg)
-    
     if opt.logger == "tensorboard":
         logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
     if opt.logger == "wandb":
@@ -954,46 +1029,27 @@ if __name__ == '__main__':
                         accelerator="gpu", devices=opt.gpus, strategy=strategy,
                         gradient_clip_val=cfg.gradient_clip_val, gradient_clip_algorithm=cfg.gradient_clip_algorithm)
     
-    # only load states for finetuning
-    if opt.finetune:
+    # only load states for finetuning and model is densenet
+    if opt.finetune and "densenet" in cfg.model.name:
         model_state = torch.load(opt.ckpt_path)
         encoder_state_dict = {k: v for k, v in model_state["state_dict"].items() if k.startswith("model.encoder.")}
-        # calibration_model.model.decoders[0].head.conv1 = nn.Conv2d(64, 1, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        # del calibration_model.model.decoders[0].head.convs
-        # calibration_model.load_state_dict(model_state["state_dict"])
         
         calibration_model_state_dict = calibration_model.state_dict()
         calibration_model_state_dict.update(encoder_state_dict)
         calibration_model.load_state_dict(calibration_model_state_dict)
         
-        # load the n heads
-        decoder_N_head_info = {'heads': 3, 'channels_per_head': 3}
+        # get out_channels from the config
+        heads = len(cfg.model.out_chans)
+        decoder_N_head_info = {'heads': heads, 'channels_per_head': 3}
         head = DecoderNHead(64, **decoder_N_head_info)
+        # delete the old head
+        del calibration_model.model.decoders[0].head
         calibration_model.model.decoders[0].head = head
         opt.ckpt_path = None
     
-    
-    student_encoders = []
-    if opt.match_features_from_encoders and False:
-        # get all of the encoders 
-        encoder_paths = opt.encoder_paths
-        # load each encoder
-        for encoder_path in encoder_paths:
-            model_state = torch.load(encoder_path)
-            
-            # create copy of calibration model, delete the decoders, use z vector
-            calibration_model_copy = deepcopy(calibration_model)
-            decoder_N_head_info = {'heads': 1, 'channels_per_head': 3}
-            head = DecoderNHead(64, **decoder_N_head_info)
-            calibration_model_copy.model.decoders[0].head = head
-            calibration_model_copy.load_state_dict(model_state["state_dict"])
-            
-            del calibration_model_copy.model.decoders
-            # move to cuda
-            calibration_model_copy.model.to(device)
-            student_encoders.append(calibration_model_copy.model)
-            
-    calibration_model.set_student_encoders(student_encoders)
+    if opt.match_features_from_encoders:
+        student_encoders = construct_student_encoders(opt.encoder_paths, calibration_model)
+        calibration_model.set_student_encoders(student_encoders)
     
     if opt.eval:
         trainer.test(model=calibration_model, dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)

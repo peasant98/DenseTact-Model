@@ -123,7 +123,7 @@ class CombinedMAEDataset(Dataset):
         return image
         
 class FullDataset(Dataset):
-    OUTPUT_TYPES = ['depth', 'stress1', 'stress2', 'disp', 'shear']
+    OUTPUT_TYPES = ['depth', 'stress1', 'stress2', 'disp', 'shear', 'cnorm']
     def __init__(self,  opt, transform=None, 
                  samples_dir='../Documents/Dataset/sim_dataset', 
                  root_dir=None,

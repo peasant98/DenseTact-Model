@@ -174,7 +174,7 @@ class ResizeConv(nn.Module):
 class FullDecoder(nn.Module):
     def __init__(self, encoder_num_features, decoder_features,
                         decoder_mid_dim, decoder_output_dim,
-                        output_channels=1, decoder_N_head_info={'heads': 1, 'channels_per_head': 3}):
+                        output_channels=1, decoder_N_head_info={'heads': 2, 'channels_per_head': 3}):
         """
         Full Decoder of DenseNet
         encoder_num_features List[int]: number of features from the encoder, from deep to shallow 
