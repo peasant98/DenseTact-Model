@@ -57,6 +57,17 @@ manager = Manager()
 sample_id = manager.Value('i', 0)
 sample_id_lock = manager.Lock()
 
+
+STRESS1_MEANS = [-0.00228839, -0.00501893, -0.00231929]
+STRESS1_STDS = [0.00511871, 0.00739775, 0.00576505]
+
+def normalize_item(item, channel_means, channel_stds):
+    """
+    Normalize a single item with shape (H, W, C).
+    """
+    normalized_item = (item - channel_means[None, None, :]) / channel_stds[None, None, :]
+    return normalized_item
+
 def write_data(file_path, data, is_X = True, bounds_dict=None):
     global MAX
     if is_X:
@@ -143,6 +154,7 @@ class FullDataset(Dataset):
         self.root_dir = root_dir
         self.transform = transform  
         self.output_type = opt.dataset.output_type
+        self.normalization = opt.dataset.normalization
 
         for t in opt.dataset.output_type:
             assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, \
@@ -515,6 +527,11 @@ class FullDataset(Dataset):
                 x3 = ((stress1_img[:,:,2] / 255.0) * (bounds['S11']['max_val_b'] - bounds['S11']['min_val_b'])) + bounds['S11']['min_val_b']
                 stress1 = np.stack([x1, x2, x3], axis=2)
                 stress1 = stress1 * self.output_mask[:,:,np.newaxis]
+                
+                # perform normalization if desired
+                if self.normalization:
+                    stress1 = normalize_item(stress1, np.array(STRESS1_MEANS), np.array(STRESS1_STDS))
+                
                 data_pack.append(stress1)
             
             elif t == 'stress2':

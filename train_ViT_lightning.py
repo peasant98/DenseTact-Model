@@ -40,6 +40,8 @@ from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
 from models.dense import DecoderNHead
 
+from tqdm import tqdm
+
 def apply_colormap(depth_map, cmap='viridis'):  
     depth_map_normalized = (depth_map - np.min(depth_map)) / (np.max(depth_map) - np.min(depth_map) + 0.00001)  # Normalize to [0, 1]
     colormap = plt.get_cmap(cmap)
@@ -344,6 +346,20 @@ class LightningDTModel(L.LightningModule):
         label_dict = self._process_prediction(Y)
 
         for name in self.cfg.dataset.output_type:
+            scale = 1
+            if 'disp' in name:
+                weight = self.cfg.loss.disp_weight
+                scale = self.cfg.scales.disp
+            elif 'stress' in name:
+                weight = self.cfg.loss.stress_weight
+                scale = self.cfg.scales.stress
+            elif 'depth' in name:
+                weight = self.cfg.loss.depth_weight
+                scale = self.cfg.scales.depth
+            elif 'cnorm' in name:
+                weight = self.cfg.loss.cnorm_weight
+                scale = self.cfg.scales.cnorm
+            
             if name == 'depth':
                 
                 # if the label_dict is below a very small threshold, have the loss be weighted small
@@ -354,25 +370,16 @@ class LightningDTModel(L.LightningModule):
                         loss += 100 * self.criterion(predict_dict[name], label_dict[name] * self.cfg.scale)
                     else:
                         loss += 1 * self.criterion(predict_dict[name], label_dict[name] * self.cfg.scale)
-                
-                # loss = self.criterion(predict_dict[name], label_dict[name] * self.cfg.scale)
 
             else:
                 channels = [f"{name}_{d}" for d in ["x", "y", "z"]]
                 pred_vec = torch.stack([predict_dict[c] for c in channels], dim=1)
                 label_vec = torch.stack([label_dict[c] for c in channels], dim=1)
 
-                loss = self.criterion(pred_vec, label_vec * self.cfg.scale)
-
-            if 'disp' in name:
-                weight = self.cfg.loss.disp_weight
-            elif 'stress' in name:
-                weight = self.cfg.loss.stress_weight
-            elif 'depth' in name:
-                weight = self.cfg.loss.depth_weight
+                loss = self.criterion(pred_vec, label_vec * scale)
 
             total_loss += weight * loss
-            self.log(f'train/{name}/loss', weight * loss / self.cfg.scale, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+            self.log(f'train/{name}/loss', weight * loss / scale, on_step=True, on_epoch=True, prog_bar=False, logger=True)
 
         self.log('train/loss', total_loss / self.cfg.scale , on_step=True, on_epoch=True, prog_bar=True, logger=True)
         
@@ -435,7 +442,7 @@ class LightningDTModel(L.LightningModule):
         abs_interval = TF_abs_error_thresh / num_bins
         threshold_abs = [k * abs_interval for k in range(1, num_bins + 1)]
 
-        # Here, negative samples are the pixels with value than 1e-6
+        # Here, negative samples are the pixels with value less than 1e-6
         # positive samples are the pixels with value greater than 1e-6
         eps = PN_thresh
 
@@ -645,8 +652,6 @@ class LightningDTModel(L.LightningModule):
         else: 
             pred = self.model(X)
             
-        mse = self.mse(pred, Y)
-        
         with torch.no_grad():
             # visualize the reconstructed images
             # visualize first y and pred
@@ -689,11 +694,25 @@ class LightningDTModel(L.LightningModule):
                     fig.savefig(osp.join(self.logger.save_dir, f"{name}_prediction_{batch_idx}_{i}.png"))
                 plt.close(fig)
         
+        
+        # unscale the prediction by each output scale
+        for idx, name in enumerate(self.output_names):
+            scale = 1
+            if 'disp' in name:
+                scale = self.cfg.scales.disp
+            elif 'stress' in name:
+                scale = self.cfg.scales.stress
+            elif 'depth' in name:
+                scale = self.cfg.scales.depth
+            elif 'cnorm' in name:
+                scale = self.cfg.scales.cnorm
+            
+            pred[:, idx, :, :] /= scale
+        
         mse = self.mse(pred, Y)
-        mse /= self.cfg.scale
         
         # get cosine similarity for each vector
-        # todo -- this won't work with zero vectors, make sure to fix this! 
+        # todo -- this won't work with zero vectors because they might have high difference
         # cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
         
         # # compute l1 loss for each vector
@@ -980,6 +999,33 @@ if __name__ == '__main__':
     
     dataset = FullDataset(cfg, transform=transform, 
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
+    
+    # go through dataset and find mean std
+    
+    
+    # get 1k random idx
+#     idx = np.random.choice(len(dataset), len(dataset), replace=False)
+#     # 
+#     channel_sums = np.zeros(3)
+#     channel_squares = np.zeros(3)
+#     num_pixels = len(idx) * 256 * 256
+# # 
+#     # Iterate through the list of items
+#     for i in tqdm(idx, desc="Processing items"):
+#         item = dataset[i][1].numpy()  # Shape (3, 256, 256)
+#         channel_sums += np.sum(item, axis=(1, 2))  # Sum over height and width (axes 1 and 2)
+#         channel_squares += np.sum(item**2, axis=(1, 2))  # Sum of squares over height and width
+# # 
+#     # Calculate channel means and standard deviations
+#     channel_means = channel_sums / num_pixels
+#     channel_stds = np.sqrt(channel_squares / num_pixels - channel_means**2)
+# # 
+#     # Output the results
+#     print("Channel Means:", channel_means)
+#     print("Channel Standard Deviations:", channel_stds)
+    
+#     exit()
+    # import pdb; pdb.set_trace()
     
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)

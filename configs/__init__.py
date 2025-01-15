@@ -15,10 +15,18 @@ cfg.scale = 1.
 cfg.gradient_clip_val = None
 cfg.gradient_clip_algorithm = None
 
+cfg.scales = CN()
+cfg.scales.disp = 1.
+cfg.scales.depth = 1.
+cfg.scales.stress = 1.
+cfg.scales.cnorm = 1.
+
 cfg.loss = CN()
 cfg.loss.stress_weight = 1.
 cfg.loss.disp_weight = 1.
 cfg.loss.depth_weight = 1.
+cfg.loss.cnorm_weight = 1.
+
 
 cfg.model = CN()
 cfg.model.name = "DPT"
@@ -64,6 +72,7 @@ cfg.model.hiera.decoder_depth = 3
 cfg.dataset = CN()
 cfg.dataset.output_type = []
 cfg.dataset.contiguous_on_direction = False
+cfg.dataset.normalization = False
 
 cfg.optimizer = CN()
 cfg.optimizer.name = "Adam"
