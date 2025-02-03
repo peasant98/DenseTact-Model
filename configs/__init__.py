@@ -19,13 +19,17 @@ cfg.scales = CN()
 cfg.scales.disp = 1.
 cfg.scales.depth = 1.
 cfg.scales.stress = 1.
+cfg.scales.stress2 = 1.
 cfg.scales.cnorm = 1.
+cfg.scales.area_shear = 1.
 
 cfg.loss = CN()
 cfg.loss.stress_weight = 1.
 cfg.loss.disp_weight = 1.
 cfg.loss.depth_weight = 1.
 cfg.loss.cnorm_weight = 1.
+cfg.loss.stress2_weight = 1.
+cfg.loss.area_shear_weight = 1.
 
 
 cfg.model = CN()

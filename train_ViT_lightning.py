@@ -350,15 +350,21 @@ class LightningDTModel(L.LightningModule):
             if 'disp' in name:
                 weight = self.cfg.loss.disp_weight
                 scale = self.cfg.scales.disp
-            elif 'stress' in name:
+            elif 'stress1' in name:
                 weight = self.cfg.loss.stress_weight
                 scale = self.cfg.scales.stress
+            elif 'stress2' in name:
+                weight = self.cfg.loss.stress2_weight
+                scale = self.cfg.scales.stress2
             elif 'depth' in name:
                 weight = self.cfg.loss.depth_weight
                 scale = self.cfg.scales.depth
             elif 'cnorm' in name:
                 weight = self.cfg.loss.cnorm_weight
                 scale = self.cfg.scales.cnorm
+            elif 'shear' in name:
+                weight = self.cfg.loss.area_shear_weight
+                scale = self.cfg.scales.area_shear
             
             if name == 'depth':
                 
@@ -700,12 +706,16 @@ class LightningDTModel(L.LightningModule):
             scale = 1
             if 'disp' in name:
                 scale = self.cfg.scales.disp
-            elif 'stress' in name:
+            elif 'stress1' in name:
                 scale = self.cfg.scales.stress
+            elif 'stress2' in name:
+                scale = self.cfg.scales.stress2
             elif 'depth' in name:
                 scale = self.cfg.scales.depth
             elif 'cnorm' in name:
                 scale = self.cfg.scales.cnorm
+            elif 'area_shear' in name:
+                scale = self.cfg.scales.area_shear
             
             pred[:, idx, :, :] /= scale
         

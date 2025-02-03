@@ -1,10 +1,10 @@
 dataset_ratio: 1.0
-batch_size: 12
+batch_size: 16
 scale: 1.0
 epochs: 100
 
 scales:
-  disp: 1000.
+  cnorm: 1000.
 
 model:
   name: HieraDPT
@@ -19,7 +19,7 @@ model:
     decoder_depth: 8
 
 dataset:
-  output_type: ["disp"]
+  output_type: ["cnorm"]
 
 optimizer:
   name: AdamW
