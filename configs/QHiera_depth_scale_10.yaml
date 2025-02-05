@@ -1,23 +1,12 @@
 dataset_ratio: 1.0
-batch_size: 16
-scale: 1.
-epochs: 100
-
-scales:
-  disp: 100.
-  stress: 100.
-  cnorm: 100.
-
-loss:
-  stress_weight: 10.
-  cnorm_weight: 10.
-  disp_weight: 1. 
+batch_size: 32
+scale: 10.
 
 model:
   name: HieraDPT
-  out_chans: [3, 3, 3]
-  pretrained_model: "exp/HieraRealMAE/checkpoints/last.ckpt"
-  LoRA: True
+  out_chans: [1]
+  pretrained_model: "exp/Hiera2_MAE/checkpoints/last.ckpt"
+  LoRA: False
 
   hiera:
     decoder: "QUpsampling"
@@ -26,9 +15,8 @@ model:
     decoder_depth: 8
 
 dataset:
-  output_type: ["disp", "stress1", "cnorm"]
+  output_type: ["depth"]
   contiguous_on_direction: False
-  normalization: False
 
 optimizer:
   name: AdamW
@@ -37,6 +25,7 @@ optimizer:
 metric:
   PN_thresh: 0.001
   TF_abs_error_thresh: 0.01
+
 
 scheduler:
   name: linear_cosine
