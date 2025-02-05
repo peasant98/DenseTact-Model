@@ -608,6 +608,234 @@ class FullDataset(Dataset):
         return f'DenseTact Dataset with {self.__len__()} samples'
 
 
+
+    OUTPUT_TYPES = ['normal', 'shear', 'disp', 'cnorm', 'cstress'] # no depth anymore? 
+    SENSORS = ['est1','sft3']
+    SENSORS = ['est1'] # only one sensor for now 
+    
+    def __init__(self, opt, transform=None, 
+                 samples_dir ='../Documents/Dataset/sim_dataset', 
+                 root_dir=None,
+                 is_real_world=False):
+        """
+        Dataset for DenseTact Calibration task wth just images
+        requires image cropping with given image center and crop size
+        1. get image center from the dataset setup (depends onsensor_name)
+        2. crop image with given center and crop size (crop size might be different? )
+        Args:
+            transform (torchvision.transforms.Compose): Transform to apply to the data
+            samples_dir (str): path to the processed dataset
+            output_type (str): Type of output to get from the dataset
+            root_dir (str) Optional: Root directory of the original dataset, 
+                    This argument is only needed when pre-processing the data
+            is_real_world (bool): Flag to indicate if it is real world data
+        """
+        self.samples_dir = samples_dir
+        self.root_dir = root_dir
+        self.transform = transform  
+        self.output_type = opt.dataset.output_type
+        self.normalization = opt.dataset.normalization
+
+        for t in opt.dataset.output_type:
+            assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, \
+                                                Input was {t}"
+        self.is_real_world = is_real_world
+        self.opt = opt
+        
+        if self.is_real_world:
+            # check if real_blender_info.json exists
+            if os.path.exists('output.json'):
+                print("output.json exists")
+            else:
+                # read from output.json
+                self.blender_info = self.read_blender_info_json('real_blender_info.json')
+        else:
+            self.blender_info = self.read_blender_info_json('blender_info.json')
+            
+        if not self.is_real_world:
+            # get output mask to only worry about DT
+            self.output_mask = self.get_output_mask()
+        else:
+            # 256 by 256 mask
+            self.output_mask = np.ones((512, 512))
+        
+        # apply same mask or decrease the size into 512 by 512? 
+        self.output_mask = np.ones((512,512))
+
+        self.min = np.inf
+        self.max = -np.inf
+        
+    def construct_dataset(self):
+        self._construct_dataset_from_json()
+            
+    def create_cache(self):
+        self.cache = []
+        for i in range(self.num_samples_to_cache):
+            res = self[i]
+            self.cache.append(res)
+            print("Cached", i)
+            # add idx to cache
+
+
+class DatasetImg(Dataset):
+    # Allowed output types for this dataset (note: these names are arbitrary
+    # and you can change them as long as you update the mapping below in __getitem__)
+    OUTPUT_TYPES = ['normal', 'shear', 'disp', 'cnorm', 'cstress']
+    # Example sensor names (not used in this minimal example)
+    SENSORS = ['est1', 'sft3']
+    SENSORS = ['est1']  # only one sensor for now 
+
+    def __init__(self, opt, transform=None, 
+                 samples_dir ='../Documents/Dataset/sim_dataset', 
+                 root_dir=None,
+                 is_real_world=False):
+        """
+        Dataset for DenseTact Calibration using only already–processed images.
+        It expects that for each sample n there exist two directories:
+          - {samples_dir}/X{n}  containing input images:
+              deformed.png, undeformed.png, diff.png
+          - {samples_dir}/y{n}  containing output images.
+            (The processed y folder is expected to include at least the files:
+              cnorm.png, stress1.png, stress2.png, displacement.png, area_shear.png)
+        
+        The user chooses which outputs to use by setting opt.dataset.output_type (a list
+        of output keys, chosen from OUTPUT_TYPES below). This class maps those names to
+        specific file names.
+        
+        Args:
+            opt: an options object. We expect that:
+                 opt.dataset.output_type is a list of strings
+                 opt.dataset.normalization is defined (unused here, but kept for API parity)
+            transform: a torchvision.transforms.Compose (or similar) to apply to the images.
+            samples_dir (str): Directory where the processed dataset is stored.
+            root_dir (str): Not used here.
+            is_real_world (bool): Flag (unused in this minimal example).
+        """
+        self.samples_dir = samples_dir
+        self.root_dir = root_dir
+        self.transform = transform  
+        self.output_type = opt.dataset.output_type  # e.g. ['shear', 'disp', 'cnorm']
+        self.normalization = opt.dataset.normalization
+
+        # Make sure all requested outputs are allowed.
+        for t in self.output_type:
+            assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, Input was {t}"
+        self.is_real_world = is_real_world
+        self.opt = opt
+        
+        # For this class we do not need to process raw data.
+        # (We could load additional info here if desired.)
+        self.blender_info = {}
+        # Here we always use an output mask of ones (512x512)
+        self.output_mask = np.ones((512,512))
+
+    def __len__(self):
+        """
+        The number of samples is taken as the number of directories in samples_dir that
+        begin with "X". (Each sample should have a corresponding X{n} and y{n} folder.)
+        """
+        sample_dirs = [
+            d for d in os.listdir(self.samples_dir)
+            if d.startswith("X") and os.path.isdir(os.path.join(self.samples_dir, d))
+        ]
+        return len(sample_dirs)
+
+    def __getitem__(self, idx):
+        """
+        Returns a tuple (X, y) where:
+         - X is the input tensor constructed from deformed.png, undeformed.png and diff.png.
+         - y is constructed by loading (and concatenating) the requested output images.
+        """
+        # Our samples are assumed to be numbered starting at 1.
+        sample_num = idx + 1
+        x_dir = os.path.join(self.samples_dir, f"X{sample_num}")
+        y_dir = os.path.join(self.samples_dir, f"y{sample_num}")
+
+        # --- Process input images ---
+        deformed_path = os.path.join(x_dir, "deformed.png")
+        undeformed_path = os.path.join(x_dir, "undeformed.png")
+        diff_path = os.path.join(x_dir, "diff.png")
+
+        deformed_img = cv2.imread(deformed_path)
+        undeformed_img = cv2.imread(undeformed_path)
+        diff_img = cv2.imread(diff_path, cv2.IMREAD_ANYDEPTH)
+
+        if deformed_img is None or undeformed_img is None or diff_img is None:
+            raise FileNotFoundError(f"One or more input images not found for sample {sample_num}")
+
+        # Convert deformed and undeformed images to RGB and normalize to [0,1]
+        deformed_img = cv2.cvtColor(deformed_img, cv2.COLOR_BGR2RGB) / 255.0
+        undeformed_img = cv2.cvtColor(undeformed_img, cv2.COLOR_BGR2RGB) / 255.0
+
+        # Process the diff image: ensure it has a channel dimension and scale it
+        diff_img = diff_img.astype(np.float32)
+        if diff_img.ndim == 2:
+            diff_img = diff_img[:, :, np.newaxis]
+        else:
+            diff_img = diff_img[:, :, 0:1]  # take one channel if more are present
+        diff_img = diff_img / 255.0
+
+        # Concatenate the three inputs along the channel axis.
+        # (deformed and undeformed are 3-channel images; diff is 1 channel → total 7 channels)
+        X = np.concatenate([deformed_img, undeformed_img, diff_img], axis=2)
+
+        if self.transform:
+            X = self.transform(X)
+
+        # --- Process output images ---
+        # Define a mapping from our allowed output types to file names in the y folder.
+        output_mapping = {
+            'normal': 'nforce.png',       # if not found, we later fall back to 'cnorm.png'
+            'shear': 'sforce.png',
+            'disp': 'disp.png',
+            'cnorm': 'cnforce.png',
+            'cstress': 'csforce.png'
+        }
+
+        y_images = []
+        for out_type in self.output_type:
+            file_name = output_mapping.get(out_type)
+            out_path = os.path.join(y_dir, file_name)
+            img = cv2.imread(out_path)
+            # For 'normal', if the file does not exist, try to use 'cnorm.png'
+            if out_type == 'normal' and img is None:
+                out_path = os.path.join(y_dir, 'cnforce.png')
+                img = cv2.imread(out_path)
+            if img is None:
+                raise FileNotFoundError(
+                    f"Output image for type '{out_type}' not found in sample {sample_num} at path {out_path}"
+                )
+            # If the image has 3 channels, convert from BGR to RGB.
+            if len(img.shape) == 3 and img.shape[2] == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            # Normalize uint8 images to the [0,1] range.
+            if img.dtype == np.uint8:
+                img = img.astype(np.float32) / 255.0
+            else:
+                img = img.astype(np.float32)
+            y_images.append(img)
+
+        # Concatenate all requested outputs along the channel dimension.
+        y = np.concatenate(y_images, axis=2)
+
+        if self.transform:
+            y = self.transform(y)
+
+        return X, y
+
+    def __repr__(self):
+        return f"DatasetImg(samples_dir={self.samples_dir}, num_samples={len(self)})"
+
+    # Dummy methods so that any calls from __init__ (if present) do not fail.
+    def read_blender_info_json(self, json_file):
+        return {}
+
+    def get_output_mask(self):
+        return np.ones((1120, 1120))
+
+
+
+
 def center_crop(image, crop_px):
     # Read the image
     if len(image.shape) == 2:
@@ -688,10 +916,19 @@ if __name__ == '__main__':
     # X = X.permute(1, 2, 0).numpy()
     # plt.imshow(X)
     # plt.show()
+
+
+    # plt.imshow(img)
+    # plt.show()
     
-    dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
-                          root_dir=root_dir, is_real_world=is_real_world, output_type='full')
-    
+    # assert False
+
+
+    # dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
+    #                       root_dir=root_dir, is_real_world=is_real_world, output_type='full')
+    dataset = DatasetImg(transform=transform, samples_dir=samples_dir, 
+                            root_dir=root_dir, is_real_world=is_real_world)
+
     print()
     full_max = 0
     full_min = 0
