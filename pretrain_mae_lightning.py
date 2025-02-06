@@ -12,7 +12,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, random_split
 import torchvision.models as models
 from torchvision import transforms
-from process_data import FullDataset
+from process_data import FullDataset, DatasetImg
 from lightning.pytorch.loggers import TensorBoardLogger
 
 import lightning as L
@@ -123,10 +123,10 @@ class LightningDTModel(L.LightningModule):
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
-    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
+    arg.add_argument('--dataset_dir', type=str, default="/home/wkdo/Documents/dataset/es1t/dataset")
     arg.add_argument('--epochs', type=int, default=200)
-    arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
-    arg.add_argument('--gpus', type=int, default=1)
+    arg.add_argument('--config', type=str, default="configs/hiera_pretrain.yaml")
+    arg.add_argument('--gpus', type=int, default=2)
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=32)
     arg.add_argument('--num_workers', type=int, default=20)
@@ -147,7 +147,8 @@ if __name__ == '__main__':
         transforms.Resize((256, 256), antialias=True),
     ])
     
-    dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
+    # dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
+    dataset = DatasetImg(cfg, transform=transform, samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
 

@@ -47,7 +47,9 @@ FEAT_CHANNEL = {
     "stress1": 3,
     "stress2": 3,
     "shear": 3,
-    "cnorm": 3
+    "cnorm": 3,
+    "cshear": 3,
+    "normal": 3
 }
 
 MAX = 0
@@ -609,7 +611,7 @@ class FullDataset(Dataset):
 
 
 
-    OUTPUT_TYPES = ['normal', 'shear', 'disp', 'cnorm', 'cstress'] # no depth anymore? 
+    OUTPUT_TYPES = ['normal', 'shear', 'disp', 'cnorm', 'cshear'] # no depth anymore? 
     SENSORS = ['est1','sft3']
     SENSORS = ['est1'] # only one sensor for now 
     
@@ -680,7 +682,7 @@ class FullDataset(Dataset):
 class DatasetImg(Dataset):
     # Allowed output types for this dataset (note: these names are arbitrary
     # and you can change them as long as you update the mapping below in __getitem__)
-    OUTPUT_TYPES = ['normal', 'shear', 'disp', 'cnorm', 'cstress']
+    OUTPUT_TYPES = ['normal', 'shear', 'disp', 'cnorm', 'cshear']
     # Example sensor names (not used in this minimal example)
     SENSORS = ['est1', 'sft3']
     SENSORS = ['est1']  # only one sensor for now 
@@ -688,7 +690,7 @@ class DatasetImg(Dataset):
     def __init__(self, opt, transform=None, 
                  samples_dir ='../Documents/Dataset/sim_dataset', 
                  root_dir=None,
-                 is_real_world=False):
+                 is_real_world=False, resize512=True):
         """
         Dataset for DenseTact Calibration using only already–processed images.
         It expects that for each sample n there exist two directories:
@@ -716,7 +718,7 @@ class DatasetImg(Dataset):
         self.transform = transform  
         self.output_type = opt.dataset.output_type  # e.g. ['shear', 'disp', 'cnorm']
         self.normalization = opt.dataset.normalization
-
+        self.resize512 = resize512
         # Make sure all requested outputs are allowed.
         for t in self.output_type:
             assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, Input was {t}"
@@ -727,7 +729,9 @@ class DatasetImg(Dataset):
         # (We could load additional info here if desired.)
         self.blender_info = {}
         # Here we always use an output mask of ones (512x512)
-        self.output_mask = np.ones((512,512))
+        self.output_mask = np.ones((1120,1120))
+        if self.resize512:
+            self.output_mask = np.ones((512,512))
 
     def __len__(self):
         """
@@ -760,13 +764,20 @@ class DatasetImg(Dataset):
         undeformed_img = cv2.imread(undeformed_path)
         diff_img = cv2.imread(diff_path, cv2.IMREAD_ANYDEPTH)
 
+        if self.resize512:
+            deformed_img = cv2.resize(deformed_img, (512, 512))
+            undeformed_img = cv2.resize(undeformed_img, (512, 512))
+            diff_img = cv2.resize(diff_img, (512, 512))
+
+
         if deformed_img is None or undeformed_img is None or diff_img is None:
             raise FileNotFoundError(f"One or more input images not found for sample {sample_num}")
 
         # Convert deformed and undeformed images to RGB and normalize to [0,1]
         deformed_img = cv2.cvtColor(deformed_img, cv2.COLOR_BGR2RGB) / 255.0
         undeformed_img = cv2.cvtColor(undeformed_img, cv2.COLOR_BGR2RGB) / 255.0
-
+        deformed_img = deformed_img.astype(np.float32)
+        undeformed_img = undeformed_img.astype(np.float32)
         # Process the diff image: ensure it has a channel dimension and scale it
         diff_img = diff_img.astype(np.float32)
         if diff_img.ndim == 2:
@@ -789,7 +800,7 @@ class DatasetImg(Dataset):
             'shear': 'sforce.png',
             'disp': 'disp.png',
             'cnorm': 'cnforce.png',
-            'cstress': 'csforce.png'
+            'cshear': 'csforce.png'
         }
 
         y_images = []
@@ -797,10 +808,14 @@ class DatasetImg(Dataset):
             file_name = output_mapping.get(out_type)
             out_path = os.path.join(y_dir, file_name)
             img = cv2.imread(out_path)
+            if self.resize512:
+                img = cv2.resize(img, (512, 512))
             # For 'normal', if the file does not exist, try to use 'cnorm.png'
             if out_type == 'normal' and img is None:
                 out_path = os.path.join(y_dir, 'cnforce.png')
                 img = cv2.imread(out_path)
+                if self.resize512:
+                    img = cv2.resize(img, (512, 512))
             if img is None:
                 raise FileNotFoundError(
                     f"Output image for type '{out_type}' not found in sample {sample_num} at path {out_path}"
@@ -831,7 +846,10 @@ class DatasetImg(Dataset):
         return {}
 
     def get_output_mask(self):
-        return np.ones((1120, 1120))
+        if self.resize512:
+            return np.ones((512, 512))
+        else:
+            return np.ones((1120, 1120))
 
 
 

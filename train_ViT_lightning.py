@@ -21,7 +21,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import torchvision.models as models
 import torch.nn.functional as F
 from torchvision import transforms
-from process_data import FullDataset, FEAT_CHANNEL
+from process_data import FullDataset, FEAT_CHANNEL, DatasetImg
 
 from torchmetrics.functional import structural_similarity_index_measure
 
@@ -162,7 +162,7 @@ class L1WithGradientLoss(nn.Module):
 # create channel-wise ssim loss
 class L1WithSSIMLoss(nn.Module):
     def __init__(self):
-        super(SSIMLoss, self).__init__()
+        super(L1WithSSIMLoss, self).__init__()
         self.ssim = structural_similarity_index_measure
         # bias to have positive values
         self.bias = 10
@@ -353,6 +353,13 @@ class LightningDTModel(L.LightningModule):
             elif 'stress1' in name:
                 weight = self.cfg.loss.stress_weight
                 scale = self.cfg.scales.stress
+            elif 'normal' in name:
+                weight = self.cfg.loss.stress_weight
+                scale = self.cfg.scales.stress
+            elif 'shear' in name:
+                weight = self.cfg.loss.stress_weight
+                scale = self.cfg.scales.stress2
+
             elif 'stress2' in name:
                 weight = self.cfg.loss.stress2_weight
                 scale = self.cfg.scales.stress2
@@ -362,7 +369,7 @@ class LightningDTModel(L.LightningModule):
             elif 'cnorm' in name:
                 weight = self.cfg.loss.cnorm_weight
                 scale = self.cfg.scales.cnorm
-            elif 'shear' in name:
+            elif 'cshear' in name:
                 weight = self.cfg.loss.area_shear_weight
                 scale = self.cfg.scales.area_shear
             
@@ -977,12 +984,13 @@ def construct_student_encoders(encoder_paths, calibration_model):
 
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
-    arg.add_argument('--gpus', type=int, default=4)
+    arg.add_argument('--gpus', type=int, default=2) # 4
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
     arg.add_argument('--logger', type=str, default="tensorboard")
-    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
+    # arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
+    arg.add_argument('--dataset_dir', type=str, default="/media/wkdo/Seagate1/won/simul/dataset/es1t/dataset")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
     arg.add_argument('--match_features_from_encoders', action='store_true')
@@ -1007,7 +1015,10 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
     
-    dataset = FullDataset(cfg, transform=transform, 
+    # dataset = FullDataset(cfg, transform=transform, 
+    #                       samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
+    
+    dataset = DatasetImg(cfg, transform=transform, 
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     
     # go through dataset and find mean std

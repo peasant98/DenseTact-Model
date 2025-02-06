@@ -1,14 +1,11 @@
-dataset_ratio: 1.0
-batch_size: 16
-scale: 1.0
-epochs: 100
+dataset_ratio: 0.5
 
-scales:
-  area_shear: 100.
+loss:
+  stress_weight: 10.
 
 model:
   name: HieraDPT
-  out_chans: [3]
+  out_chans: [3, 3]
   pretrained_model: "exp/HieraRealMAE/checkpoints/last.ckpt"
   LoRA: True
 
@@ -19,7 +16,8 @@ model:
     decoder_depth: 8
 
 dataset:
-  output_type: ["shear"]
+  output_type: ["disp", "stress1"]
+  contiguous_on_direction: False
 
 optimizer:
   name: AdamW
