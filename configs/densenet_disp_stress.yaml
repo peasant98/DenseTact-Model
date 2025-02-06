@@ -13,7 +13,11 @@ dataset:
   # dataset_path: "real_world_dataset"
 
 optimizer:
-  name: AdamW
+  name: Adam
+
+metric:
+  PN_thresh: 0.001
+  TF_abs_error_thresh: 0.01
 
 scheduler:
   name: "none"

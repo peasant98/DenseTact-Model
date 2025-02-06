@@ -1,16 +1,14 @@
 dataset_ratio: 1.0
-batch_size: 16
+batch_size: 12
 scale: 1.0
 epochs: 100
 
 scales:
-  area_shear: 100.
+  stress: 10000.
 
 model:
   name: HieraDPT
   out_chans: [3]
-  pretrained_model: "exp/HieraRealMAE/checkpoints/last.ckpt"
-  LoRA: True
 
   hiera:
     decoder: "QUpsampling"
@@ -19,7 +17,7 @@ model:
     decoder_depth: 8
 
 dataset:
-  output_type: ["shear"]
+  output_type: ["stress1"]
 
 optimizer:
   name: AdamW

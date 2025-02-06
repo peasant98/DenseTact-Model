@@ -150,7 +150,7 @@ if __name__ == '__main__':
     dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
-
+    
     # take only 10 percent of dataset for train and test
     dataset_length = int(opt.dataset_ratio * full_dataset_length)
     train_size = int(0.95 * dataset_length)
