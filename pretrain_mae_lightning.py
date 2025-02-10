@@ -45,9 +45,8 @@ class LightningDTModel(L.LightningModule):
             exit()
 
         self.criterion = nn.L1Loss()
-        # self.criterion = nn.MSELoss()
         self.mse = nn.MSELoss()
-        
+        print(self.model)
         self.learning_rate = learning_rate
         self.num_epochs = num_epochs
         self.total_steps = total_steps
@@ -126,7 +125,7 @@ if __name__ == '__main__':
     arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
     arg.add_argument('--epochs', type=int, default=200)
     arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
-    arg.add_argument('--gpus', type=int, default=1)
+    arg.add_argument('--gpus', type=int, default=4)
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=32)
     arg.add_argument('--num_workers', type=int, default=20)

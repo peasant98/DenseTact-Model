@@ -4,7 +4,7 @@ scale: 1.0
 epochs: 100
 
 scales:
-  disp: 1000.
+  disp: 1.
 
 model:
   name: HieraDPT
