@@ -122,9 +122,9 @@ class LightningDTModel(L.LightningModule):
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
-    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
+    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/dataset_local/")
     arg.add_argument('--epochs', type=int, default=200)
-    arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
+    arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
     arg.add_argument('--gpus', type=int, default=4)
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=32)
@@ -146,7 +146,8 @@ if __name__ == '__main__':
         transforms.Resize((256, 256), antialias=True),
     ])
     
-    dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
+    
+    dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, is_real_world=opt.real_world, is_mae=True)
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
     
@@ -157,6 +158,20 @@ if __name__ == '__main__':
     
     train_dataset, test_dataset, _ = random_split(dataset, [train_size, test_size, full_dataset_length - dataset_length])
     print(f"Train dataset length: {len(train_dataset)}, Test dataset length: {len(test_dataset)}")
+    
+    X, y = dataset[1000]
+    deform_color = X[:3, :, :].detach().cpu().numpy()
+    undeform_color = X[3:6, :, :].detach().cpu().numpy()
+    diff_color = X[6, :, :].detach().cpu().numpy()
+    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+    ax[0].imshow(deform_color.transpose(1, 2, 0))
+    ax[0].set_title("Deformed Image")
+    ax[1].imshow(undeform_color.transpose(1, 2, 0))
+    ax[1].set_title("Undeformed Image")
+    ax[2].imshow(diff_color, cmap='gray')
+    ax[2].set_title("Diff Image")
+    plt.savefig("sample_image.png")
+    plt.close()
     
     dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers)
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=True, num_workers=12)

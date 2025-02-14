@@ -138,7 +138,7 @@ class FullDataset(Dataset):
     def __init__(self,  opt, transform=None, 
                  samples_dir='../Documents/Dataset/sim_dataset', 
                  root_dir=None,
-                 is_real_world=False):
+                 is_real_world=False, is_mae=False):
         """
         Dataset for DenseTact Calibration task
 
@@ -155,6 +155,7 @@ class FullDataset(Dataset):
         self.transform = transform  
         self.output_type = opt.dataset.output_type
         self.normalization = opt.dataset.normalization
+        self.is_mae = is_mae
 
         for t in opt.dataset.output_type:
             assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, \
@@ -478,18 +479,32 @@ class FullDataset(Dataset):
         deformed_img_norm = cv2.cvtColor(deformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
         undeformed_img_norm = cv2.cvtColor(undeformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
         
-        # read image diff
-        image_diff = cv2.imread(f'{self.samples_dir}/X{sample_num}/diff.png', cv2.IMREAD_ANYDEPTH)
-        # convert image diff to float
-        image_diff = image_diff.astype(np.float32)
+        hsv_img1 = cv2.cvtColor((deformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
+        hsv_img2 = cv2.cvtColor((undeformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
+
+        image_diff = cv2.subtract(hsv_img1[:,:,2], hsv_img2[:,:,2]) / 255.0
         # add extra dimension
         image_diff = image_diff[:,:,np.newaxis]
         
-        # normalize image diff
-        image_diff = image_diff / 255.0
+        # read image diff
+        # image_diff = cv2.imread(f'{self.samples_dir}/X{sample_num}/diff.png', cv2.IMREAD_ANYDEPTH)
+        # # convert image diff to float
+        # image_diff = image_diff.astype(np.float32)
+        # # add extra dimension
+        # image_diff = image_diff[:,:,np.newaxis]
+        
+        # # normalize image diff
+        # image_diff = image_diff / 255.0
 
         data_pack = []
-
+        
+        if self.is_mae:
+            X = (deformed_img_norm, undeformed_img_norm, image_diff)
+            X = np.concatenate(X, axis=2)
+            X = self.transform(X).float()
+            y = [0]
+            return X, y
+        
         # load bounds json only if it exists
         bounds_exists = os.path.exists(f'{self.samples_dir}/y{sample_num}/bounds.json')
         if bounds_exists:
