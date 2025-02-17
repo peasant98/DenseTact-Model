@@ -266,7 +266,6 @@ class DepthEncoderDecoder(nn.Module):
         should be double nested (i.e.  List[Tensor], List[List[dict]]), with
         the outer list indicating test time augmentations.
         """
-        import pdb; pdb.set_trace()
         if return_loss:
             return self.forward_train(img, img_metas, **kwargs)
         else:

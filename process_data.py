@@ -471,7 +471,6 @@ class FullDataset(Dataset):
         augmentation_num = int((idx // (self.length / 4)))
         sample_num = idx + 1
         
-        
         # read deformed and undeformed images
         deformed_img_norm = cv2.imread(f'{self.samples_dir}/X{sample_num}/deformed.png')
         undeformed_img_norm = cv2.imread(f'{self.samples_dir}/X{sample_num}/undeformed.png')
@@ -486,18 +485,9 @@ class FullDataset(Dataset):
         # add extra dimension
         image_diff = image_diff[:,:,np.newaxis]
         
-        # read image diff
-        # image_diff = cv2.imread(f'{self.samples_dir}/X{sample_num}/diff.png', cv2.IMREAD_ANYDEPTH)
-        # # convert image diff to float
-        # image_diff = image_diff.astype(np.float32)
-        # # add extra dimension
-        # image_diff = image_diff[:,:,np.newaxis]
-        
-        # # normalize image diff
-        # image_diff = image_diff / 255.0
-
         data_pack = []
         
+        # return data to avoid extra file reads.
         if self.is_mae:
             X = (deformed_img_norm, undeformed_img_norm, image_diff)
             X = np.concatenate(X, axis=2)
@@ -562,13 +552,17 @@ class FullDataset(Dataset):
 
             elif t == 'disp':
                 # process displacement
-                displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/displacement.png')
+                # displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/displacement.png')
+                displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/disp_local.png')
                 displacement_img = cv2.cvtColor(displacement_img, cv2.COLOR_BGR2RGB)
-                x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['UU1']['max_val_r'] - bounds['UU1']['min_val_r'])) + bounds['UU1']['min_val_r']
-                x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['UU1']['max_val_g'] - bounds['UU1']['min_val_g'])) + bounds['UU1']['min_val_g']
-                x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['UU1']['max_val_b'] - bounds['UU1']['min_val_b'])) + bounds['UU1']['min_val_b']
+                # x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['UU1']['max_val_r'] - bounds['UU1']['min_val_r'])) + bounds['UU1']['min_val_r']
+                # x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['UU1']['max_val_g'] - bounds['UU1']['min_val_g'])) + bounds['UU1']['min_val_g']
+                # x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['UU1']['max_val_b'] - bounds['UU1']['min_val_b'])) + bounds['UU1']['min_val_b']
+                x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['disp_local']['max_val_r'] - bounds['disp_local']['min_val_r'])) + bounds['disp_local']['min_val_r']
+                x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['disp_local']['max_val_g'] - bounds['disp_local']['min_val_g'])) + bounds['disp_local']['min_val_g']
+                x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['disp_local']['max_val_b'] - bounds['disp_local']['min_val_b'])) + bounds['disp_local']['min_val_b']
                 displacement = np.stack([x1, x2, x3], axis=2)
-                displacement = displacement * self.output_mask[:,:,np.newaxis]
+                displacement = displacement # * self.output_mask[:,:,np.newaxis]
                 data_pack.append(displacement)
 
             elif t == "shear":
@@ -694,15 +688,6 @@ if __name__ == '__main__':
         transforms.Resize((256, 256), antialias=True),
     ])
     
-    
-    # combined_mae_dataset = CombinedMAEDataset(dir1='../DenseTact-Calibration-M/real_dataset', dir2='real_world_depth', transform=transform)
-    
-    # X = combined_mae_dataset[10]
-    
-    # # plot image
-    # X = X.permute(1, 2, 0).numpy()
-    # plt.imshow(X)
-    # plt.show()
     
     dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
                           root_dir=root_dir, is_real_world=is_real_world, output_type='full')

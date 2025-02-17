@@ -210,6 +210,7 @@ class LightningDTModel(L.LightningModule):
         self.cfg = cfg
 
         self.model = build_model(cfg)
+
         
         if len(self.cfg.model.pretrained_model) > 0:
             print("Load pretrained model")
@@ -977,7 +978,7 @@ def construct_student_encoders(encoder_paths, calibration_model):
 
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
-    arg.add_argument('--gpus', type=int, default=4)
+    arg.add_argument('--gpus', type=int, default=1)
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
@@ -988,8 +989,7 @@ if __name__ == '__main__':
     arg.add_argument('--match_features_from_encoders', action='store_true')
     arg.add_argument('--encoder_paths', nargs='+', type=str, help="List of encoder paths")
     arg.add_argument('--real_world', action='store_true')
-    opt = arg.parse_args()
-    
+    opt = arg.parse_args()    
     
     # load config
     cfg = get_cfg_defaults()
@@ -1010,35 +1010,14 @@ if __name__ == '__main__':
     dataset = FullDataset(cfg, transform=transform, 
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     
-    # go through dataset and find mean std
-    
-    
-    # get 1k random idx
-#     idx = np.random.choice(len(dataset), len(dataset), replace=False)
-#     # 
-#     channel_sums = np.zeros(3)
-#     channel_squares = np.zeros(3)
-#     num_pixels = len(idx) * 256 * 256
-# # 
-#     # Iterate through the list of items
-#     for i in tqdm(idx, desc="Processing items"):
-#         item = dataset[i][1].numpy()  # Shape (3, 256, 256)
-#         channel_sums += np.sum(item, axis=(1, 2))  # Sum over height and width (axes 1 and 2)
-#         channel_squares += np.sum(item**2, axis=(1, 2))  # Sum of squares over height and width
-# # 
-#     # Calculate channel means and standard deviations
-#     channel_means = channel_sums / num_pixels
-#     channel_stds = np.sqrt(channel_squares / num_pixels - channel_means**2)
-# # 
-#     # Output the results
-#     print("Channel Means:", channel_means)
-#     print("Channel Standard Deviations:", channel_stds)
-    
-#     exit()
-    # import pdb; pdb.set_trace()
     
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
+    
+    X, y = dataset[98]
+
+    # y is shape 3, 256, 256
+    # save to image
     
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
     train_size = int(0.7 * dataset_length)
@@ -1054,6 +1033,7 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=12)
 
     calibration_model = LightningDTModel(cfg)
+
 
     # get date
     date = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")

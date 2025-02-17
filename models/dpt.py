@@ -742,7 +742,6 @@ class HieraDPT(nn.Module):
         for k in self.encoder.state_dict().keys():
             if 'model.' + k in model_ckpt["state_dict"]:
                 state_dict[k] = model_ckpt["state_dict"]['model.' + k]
-        
         res = self.encoder.load_state_dict(state_dict)
         print(res)
 
