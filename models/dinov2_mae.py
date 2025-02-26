@@ -63,7 +63,6 @@ class MaskedAutoencoderDinoV2(nn.Module):
         self.norm_pix_loss = norm_pix_loss
         
         # create dinovit model
-        import pdb; pdb.set_trace()
         cfg = DinoV2Config()
     
         self.dino_v2_model = DINOv2DPT(cfg)

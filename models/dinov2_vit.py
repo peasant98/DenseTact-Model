@@ -325,7 +325,6 @@ class DinoVisionTransformer(nn.Module):
         return tuple(outputs)
 
     def forward(self, *args, is_training=False, **kwargs):
-        import pdb; pdb.set_trace()
         ret = self.forward_features(*args, **kwargs)
         if is_training:
             return ret

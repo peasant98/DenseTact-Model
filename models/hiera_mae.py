@@ -359,7 +359,7 @@ def mae_hiera_large_224(**kwargs):
 
 def mae_hiera_large_256(**kwargs):
     return MaskedAutoencoderHiera(
-        embed_dim=96, num_heads=2, stages=(2, 6, 36, 4), q_pool=2, **kwargs,
+        embed_dim=96, num_heads=1, stages=(2, 3, 16, 3), q_pool=2, **kwargs,
     )
 
 

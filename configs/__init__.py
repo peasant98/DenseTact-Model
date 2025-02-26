@@ -53,10 +53,10 @@ cfg.model.cnn.decoder_output_dim = [1024, 512, 256, 128, 64]
 
 # parameters for Hiera model
 cfg.model.hiera = CN()
-# this is the defaut for encoder
+# this is the default for encoder
 cfg.model.hiera.embed_dim = 96
-cfg.model.hiera.num_heads = 2
-cfg.model.hiera.stages = [2, 6, 36, 4]
+cfg.model.hiera.num_heads = 1
+cfg.model.hiera.stages = [2, 3, 16, 3]
 cfg.model.hiera.q_pool = 2
 cfg.model.hiera.patch_stride = [4, 4]
 cfg.model.hiera.mlp_ratio = 4.0

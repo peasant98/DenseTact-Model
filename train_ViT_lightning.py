@@ -978,7 +978,7 @@ def construct_student_encoders(encoder_paths, calibration_model):
 
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
-    arg.add_argument('--gpus', type=int, default=1)
+    arg.add_argument('--gpus', type=int, default=4)
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")

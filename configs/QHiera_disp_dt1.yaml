@@ -1,15 +1,15 @@
 dataset_ratio: 1.0
 batch_size: 16
 scale: 1.0
-epochs: 100
+epochs: 200
 
 scales:
-  disp: 1.
+  disp: 100.
 
 model:
   name: HieraDPT
   out_chans: [3]
-  pretrained_model: "exp/DT_Ultra_1/checkpoints/last.ckpt"
+  pretrained_model: "DT_Ultra_2/checkpoints/last.ckpt"
   LoRA: True
 
   hiera:
