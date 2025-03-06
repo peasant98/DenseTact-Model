@@ -4,12 +4,15 @@ scale: 1.0
 epochs: 200
 
 scales:
-  disp: 100.
+  disp: 1.
+
+unit_scales:
+  disp: 1000.
 
 model:
   name: HieraDPT
   out_chans: [3]
-  pretrained_model: "DT_Ultra_2/checkpoints/last.ckpt"
+  pretrained_model: "DT_Ultra_1/checkpoints/last.ckpt"
   LoRA: True
 
   hiera:

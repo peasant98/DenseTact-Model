@@ -707,16 +707,22 @@ class LightningDTModel(L.LightningModule):
             scale = 1
             if 'disp' in name:
                 scale = self.cfg.scales.disp
+                unit_scale = self.cfg.unit_scales.disp
             elif 'stress1' in name:
                 scale = self.cfg.scales.stress
+                unit_scale = self.cfg.unit_scales.stress
             elif 'stress2' in name:
                 scale = self.cfg.scales.stress2
+                unit_scale = self.cfg.unit_scales.stress2
             elif 'depth' in name:
                 scale = self.cfg.scales.depth
+                unit_scale = self.cfg.unit_scales.depth
             elif 'cnorm' in name:
                 scale = self.cfg.scales.cnorm
+                unit_scale = self.cfg.unit_scales.cnorm
             elif 'area_shear' in name:
                 scale = self.cfg.scales.area_shear
+                unit_scale = self.cfg.unit_scales.area_shear
             
             pred[:, idx, :, :] /= scale
         
@@ -770,7 +776,7 @@ class LightningDTModel(L.LightningModule):
                 label_vec = torch.stack([label_dict[c] for c in channels], dim=1)
 
                 # compute vector metric
-                metric_dict = self.compute_metric_vector(pred_vec, label_vec,
+                metric_dict = self.compute_metric_vector(pred_vec / unit_scale, label_vec / unit_scale,
                                                         PN_thresh=self.cfg.metric.PN_thresh,
                                                         TF_rel_error_rate=self.cfg.metric.TF_rel_error_rate,
                                                         TF_abs_error_thresh=self.cfg.metric.TF_abs_error_thresh)
@@ -1020,7 +1026,7 @@ if __name__ == '__main__':
     # save to image
     
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
-    train_size = int(0.7 * dataset_length)
+    train_size = int(0.85 * dataset_length)
     test_size = dataset_length - train_size
     cfg.total_steps = train_size * cfg.epochs // (cfg.batch_size * opt.gpus)
     

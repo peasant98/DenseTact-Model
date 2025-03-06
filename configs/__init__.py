@@ -23,6 +23,15 @@ cfg.scales.stress2 = 1.
 cfg.scales.cnorm = 1.
 cfg.scales.area_shear = 1.
 
+
+cfg.unit_scales = CN()
+cfg.unit_scales.disp = 1.
+cfg.unit_scales.depth = 1.
+cfg.unit_scales.stress = 1.
+cfg.unit_scales.stress2 = 1.
+cfg.unit_scales.cnorm = 1.
+cfg.unit_scales.area_shear = 1.
+
 cfg.loss = CN()
 cfg.loss.stress_weight = 1.
 cfg.loss.disp_weight = 1.

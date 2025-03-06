@@ -562,7 +562,6 @@ class FullDataset(Dataset):
                 x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['disp_local']['max_val_g'] - bounds['disp_local']['min_val_g'])) + bounds['disp_local']['min_val_g']
                 x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['disp_local']['max_val_b'] - bounds['disp_local']['min_val_b'])) + bounds['disp_local']['min_val_b']
                 displacement = np.stack([x1, x2, x3], axis=2)
-                displacement = displacement # * self.output_mask[:,:,np.newaxis]
                 data_pack.append(displacement)
 
             elif t == "shear":
