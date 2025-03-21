@@ -1013,6 +1013,8 @@ if __name__ == '__main__':
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
 
+    # go through some samples in the dataset
+    X, y = dataset[100]
 
     # go through each item in the dataset for displacement and compute the mean and std.
 

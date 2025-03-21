@@ -38,7 +38,7 @@ class LightningDTModel(L.LightningModule):
         super(LightningDTModel, self).__init__()
         
         if model_name in pretrain_dict:
-            self.model = pretrain_dict[model_name](input_size=256, in_chans=7)
+            self.model = pretrain_dict[model_name](input_size=256, in_chans=6)
         else:
             print("Model {} not found in pretrain_dict".format(model_name))
             print("Available models: {}".format(pretrain_dict.keys()))
@@ -58,7 +58,6 @@ class LightningDTModel(L.LightningModule):
         N, C, H, W = X.shape 
         loss, pred, mask = self.model(X, self.mask_ratio) 
 
-        # outputs = torch.cat(outputs, dim=1)
         self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         with torch.no_grad():
@@ -80,21 +79,17 @@ class LightningDTModel(L.LightningModule):
                 # reshape pred to (N, C, H, W)
                 deform_color = pred[0, :3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
                 undeform_color = pred[0, 3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
-                diff_color = pred[0, [6], :, :].detach().cpu().numpy()
                 
                 # log images in pytorch lightning
                 self.logger.experiment.add_image('reconstruct/deform_color', deform_color, self.global_step)
                 self.logger.experiment.add_image('reconstruct/undeform_color', undeform_color, self.global_step)
-                self.logger.experiment.add_image('reconstruct/diff_color', diff_color, self.global_step)
 
                 # gt images
                 gt_deform_color = X[0, :3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
                 gt_undeform_color = X[0, 3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
-                gt_diff_color = X[0, [6], :, :].detach().cpu().numpy()
 
                 self.logger.experiment.add_image('gt/deform_color', gt_deform_color, self.global_step)
                 self.logger.experiment.add_image('gt/undeform_color', gt_undeform_color, self.global_step)
-                self.logger.experiment.add_image('gt/diff_color', gt_diff_color, self.global_step)
 
                 # spatial tokens
                 spatial_num = mask.shape[1]
@@ -131,7 +126,7 @@ if __name__ == '__main__':
     arg.add_argument('--batch_size', type=int, default=32)
     arg.add_argument('--num_workers', type=int, default=20)
     arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="DT_Ultra_es4t")
+    arg.add_argument('--exp_name', type=str, default="DT_Ultra_es4t_mae")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     
@@ -163,14 +158,11 @@ if __name__ == '__main__':
     X, y = dataset[1000]
     deform_color = X[:3, :, :].detach().cpu().numpy()
     undeform_color = X[3:6, :, :].detach().cpu().numpy()
-    diff_color = X[6, :, :].detach().cpu().numpy()
-    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+    fig, ax = plt.subplots(1, 2)
     ax[0].imshow(deform_color.transpose(1, 2, 0))
     ax[0].set_title("Deformed Image")
     ax[1].imshow(undeform_color.transpose(1, 2, 0))
     ax[1].set_title("Undeformed Image")
-    ax[2].imshow(diff_color, cmap='gray')
-    ax[2].set_title("Diff Image")
     plt.savefig("sample_image.png")
     plt.close()
     

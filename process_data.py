@@ -17,6 +17,7 @@ from PIL import Image
 import numpy as np
 import cv2
 from scipy.ndimage import gaussian_filter
+import torchvision.transforms as transforms
 
 import pandas as pd
 
@@ -225,6 +226,13 @@ class FullDataset(Dataset):
         self.normalization = opt.dataset.normalization
         self.extra_samples_dirs = extra_samples_dirs
         self.is_mae = is_mae
+
+        self.color_jitter = transforms.ColorJitter(
+            brightness=0.25,
+            contrast=0.25,
+            saturation=0.25,
+            hue=0.05
+        )
 
         for t in opt.dataset.output_type:
             assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, \
@@ -499,7 +507,6 @@ class FullDataset(Dataset):
         length = sum(os.path.isdir(os.path.join(self.samples_dir, name)) for name in os.listdir(self.samples_dir)) / 2
         
         # augment data with rotations by 90 degrees
-        
         self.length = int(length)
         
         return int(length)
@@ -547,17 +554,15 @@ class FullDataset(Dataset):
         deformed_img_norm = cv2.cvtColor(deformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
         undeformed_img_norm = cv2.cvtColor(undeformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
 
-        # augment data
-        # deformed_img_norm, undeformed_img_norm = augment_images(
-        #     deformed_img_norm, 
-        #     undeformed_img_norm,
-        #     contrast_range=(0.8, 1.2),
-        #     brightness_range=(-0.1, 0.1),
-        #     hue_range=(-0.05, 0.05),
-        #     saturation_range=(0.8, 1.2),
-        #     blur_sigma=None  # Set to a value like 0.5 to enable blur
-        # )
-        
+        deformed_pil = Image.fromarray((deformed_img_norm * 255).astype(np.uint8))
+        undeformed_pil = Image.fromarray((undeformed_img_norm * 255).astype(np.uint8))
+        jittered_deformed_pil = self.color_jitter(deformed_pil)
+        jittered_undeformed_pil = self.color_jitter(undeformed_pil)
+
+        # Convert back to numpy arrays with values in [0,1] range
+        deformed_img_norm = np.array(jittered_deformed_pil).astype(np.float32) / 255.0
+        undeformed_img_norm = np.array(jittered_undeformed_pil).astype(np.float32) / 255.0
+
         hsv_img1 = cv2.cvtColor((deformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
         hsv_img2 = cv2.cvtColor((undeformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
 
@@ -569,7 +574,7 @@ class FullDataset(Dataset):
         
         # return data to avoid extra file reads.
         if self.is_mae:
-            X = (deformed_img_norm, undeformed_img_norm, image_diff)
+            X = (deformed_img_norm, undeformed_img_norm)
             X = np.concatenate(X, axis=2)
             X = self.transform(X).float()
             y = [0]
@@ -683,7 +688,7 @@ class FullDataset(Dataset):
         else:
             y = [0]
 
-        X = (deformed_img_norm, undeformed_img_norm, image_diff)
+        X = (deformed_img_norm, undeformed_img_norm)
         X = np.concatenate(X, axis=2)
         X = self.transform(X).float()
 
