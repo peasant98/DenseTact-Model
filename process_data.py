@@ -16,6 +16,7 @@ import timm
 from PIL import Image
 import numpy as np
 import cv2
+from scipy.ndimage import gaussian_filter
 
 import pandas as pd
 
@@ -66,6 +67,64 @@ FORCE_STDS =  [0.0008145869709551334, 0.0002247917652130127, 0.00009318174794316
 
 STRESS1_MEANS =  [-0.017115609720349312, -0.02853190153837204, -0.01735331304371357]
 STRESS1_STDS = [0.03661240264773369, 0.05918154492974281, 0.03791118785738945]
+
+def augment_images(deformed_img_norm, undeformed_img_norm, 
+                  contrast_range=(0.8, 1.2), 
+                  brightness_range=(-0.1, 0.1), 
+                  hue_range=(-0.05, 0.05),
+                  saturation_range=(0.8, 1.2),
+                  blur_sigma=None):
+    """
+    Apply random augmentations to both images while keeping the same transformations.
+    
+    Args:
+        deformed_img_norm: Normalized deformed image [0-1]
+        undeformed_img_norm: Normalized undeformed image [0-1]
+        contrast_range: Range for contrast adjustment
+        brightness_range: Range for brightness adjustment
+        hue_range: Range for hue shift
+        saturation_range: Range for saturation adjustment
+        blur_sigma: If not None, apply Gaussian blur with this sigma
+    
+    Returns:
+        Augmented deformed and undeformed images
+    """
+    # Generate random values for augmentation (same for both images)
+    contrast = np.random.uniform(*contrast_range)
+    brightness = np.random.uniform(*brightness_range)
+    hue_shift = np.random.uniform(*hue_range)
+    saturation = np.random.uniform(*saturation_range)
+    
+    # Make copies to avoid modifying originals
+    deformed_aug = deformed_img_norm.copy()
+    undeformed_aug = undeformed_img_norm.copy()
+    
+    # Apply contrast and brightness adjustments in RGB
+    deformed_aug = np.clip(deformed_aug * contrast + brightness, 0, 1)
+    undeformed_aug = np.clip(undeformed_aug * contrast + brightness, 0, 1)
+    
+    # Convert to HSV for hue and saturation adjustments
+    deformed_hsv = cv2.cvtColor((deformed_aug*255).astype(np.uint8), cv2.COLOR_RGB2HSV).astype(float)
+    undeformed_hsv = cv2.cvtColor((undeformed_aug*255).astype(np.uint8), cv2.COLOR_RGB2HSV).astype(float)
+    
+    # Apply hue shift (hue in OpenCV is 0-180)
+    deformed_hsv[:,:,0] = (deformed_hsv[:,:,0] + hue_shift * 180) % 180
+    undeformed_hsv[:,:,0] = (undeformed_hsv[:,:,0] + hue_shift * 180) % 180
+    
+    # Apply saturation adjustment
+    deformed_hsv[:,:,1] = np.clip(deformed_hsv[:,:,1] * saturation, 0, 255)
+    undeformed_hsv[:,:,1] = np.clip(undeformed_hsv[:,:,1] * saturation, 0, 255)
+    
+    # Convert back to RGB
+    deformed_aug = cv2.cvtColor(deformed_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB) / 255.0
+    undeformed_aug = cv2.cvtColor(undeformed_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB) / 255.0
+    
+    # Apply Gaussian blur if specified
+    if blur_sigma is not None:
+        deformed_aug = gaussian_filter(deformed_aug, sigma=(blur_sigma, blur_sigma, 0))
+        undeformed_aug = gaussian_filter(undeformed_aug, sigma=(blur_sigma, blur_sigma, 0))
+    
+    return deformed_aug, undeformed_aug
 
 def normalize_item(item, channel_means, channel_stds):
     """
@@ -146,6 +205,7 @@ class FullDataset(Dataset):
     def __init__(self,  opt, transform=None, 
                  samples_dir='../Documents/Dataset/sim_dataset', 
                  root_dir=None,
+                 extra_samples_dirs=['../Documents/Dataset/sim_dataset'],
                  is_real_world=False, is_mae=False):
         """
         Dataset for DenseTact Calibration task
@@ -163,6 +223,7 @@ class FullDataset(Dataset):
         self.transform = transform  
         self.output_type = opt.dataset.output_type
         self.normalization = opt.dataset.normalization
+        self.extra_samples_dirs = extra_samples_dirs
         self.is_mae = is_mae
 
         for t in opt.dataset.output_type:
@@ -485,6 +546,17 @@ class FullDataset(Dataset):
         
         deformed_img_norm = cv2.cvtColor(deformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
         undeformed_img_norm = cv2.cvtColor(undeformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
+
+        # augment data
+        # deformed_img_norm, undeformed_img_norm = augment_images(
+        #     deformed_img_norm, 
+        #     undeformed_img_norm,
+        #     contrast_range=(0.8, 1.2),
+        #     brightness_range=(-0.1, 0.1),
+        #     hue_range=(-0.05, 0.05),
+        #     saturation_range=(0.8, 1.2),
+        #     blur_sigma=None  # Set to a value like 0.5 to enable blur
+        # )
         
         hsv_img1 = cv2.cvtColor((deformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
         hsv_img2 = cv2.cvtColor((undeformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
