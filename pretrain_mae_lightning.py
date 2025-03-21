@@ -122,15 +122,16 @@ class LightningDTModel(L.LightningModule):
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
-    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/sf2t/dataset_local/")
+    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/es4t/es4t/dataset_local/")
     arg.add_argument('--epochs', type=int, default=200)
     arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
     arg.add_argument('--gpus', type=int, default=4)
+    
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=32)
     arg.add_argument('--num_workers', type=int, default=20)
     arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="DT_Ultra_sf2t")
+    arg.add_argument('--exp_name', type=str, default="DT_Ultra_es4t")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     

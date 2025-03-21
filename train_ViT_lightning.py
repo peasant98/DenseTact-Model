@@ -317,7 +317,10 @@ class LightningDTModel(L.LightningModule):
         if self.cfg.model.encoder == "densenet":
             pred, z = self.model(X)
         else:
-            pred = self.model(X) 
+            if self.cfg.model.hiera.return_encoder_output:
+                pred, z = self.model(X) 
+            else:
+                pred = self.model(X)
         
         # get the output of each encoder
         z_loss = 0
@@ -331,7 +334,8 @@ class LightningDTModel(L.LightningModule):
                 
                 # get l1 loss between student_pred and z
                 z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
-                
+        if self.cfg.model.hiera.return_encoder_output:
+            pass              
         loss = z_loss
         # cosine similarity between the predicted and target vectors
         # todo -- have this be between positive vectors
@@ -703,6 +707,8 @@ class LightningDTModel(L.LightningModule):
         
         
         # unscale the prediction by each output scale
+        pred_unit_scale = pred.clone()
+        Y_unit_scale = Y.clone()
         for idx, name in enumerate(self.output_names):
             scale = 1
             if 'disp' in name:
@@ -720,29 +726,16 @@ class LightningDTModel(L.LightningModule):
             elif 'cnorm' in name:
                 scale = self.cfg.scales.cnorm
                 unit_scale = self.cfg.unit_scales.cnorm
-            elif 'area_shear' in name:
+            elif 'shear' in name:
                 scale = self.cfg.scales.area_shear
                 unit_scale = self.cfg.unit_scales.area_shear
             
             pred[:, idx, :, :] /= scale
-        
-        mse = self.mse(pred, Y)
-        
-        # get cosine similarity for each vector
-        # todo -- this won't work with zero vectors because they might have high difference
-        # cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
-        
-        # # compute l1 loss for each vector
-        # l1_loss_group = self.compute_mean_l1_loss_per_group(pred, Y)
-        
-        # # for each item, log the cosine similarity and l1 loss
-        # for i, (cosine_sim, l1_loss) in enumerate(zip(cosine_similarity_group, l1_loss_group)):
-        #     self.log(f'{name}/cosine_sim_{i}', cosine_sim.item(), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        #     self.log(f'{name}/l1_loss_{i}', l1_loss.item(), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
             
-        #     # add to the validation stats
-        #     self.validation_stats[f"cosine_sim_{i}"].append(cosine_sim.item())
-        #     self.validation_stats[f"l1_loss_{i}"].append(l1_loss.item())
+            pred_unit_scale[:, idx, :, :] = pred[:, idx, :, :] / unit_scale
+            Y_unit_scale[:, idx, :, :] = Y[:, idx, :, :] / unit_scale
+        mse = self.mse(pred_unit_scale, Y_unit_scale)
+        
             
         # compute ssim per channel
         ssim_per_channel = []
@@ -761,7 +754,7 @@ class LightningDTModel(L.LightningModule):
         self.log(f'{name}/mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         self.validation_stats["mse"].append(mse.item())
 
-        predict_dict, label_dict = self._process_prediction(pred), self._process_prediction(Y)
+        predict_dict, label_dict = self._process_prediction(pred_unit_scale), self._process_prediction(Y_unit_scale)
         
         # compute force metric
         for name in self.cfg.dataset.output_type:
@@ -776,7 +769,7 @@ class LightningDTModel(L.LightningModule):
                 label_vec = torch.stack([label_dict[c] for c in channels], dim=1)
 
                 # compute vector metric
-                metric_dict = self.compute_metric_vector(pred_vec / unit_scale, label_vec / unit_scale,
+                metric_dict = self.compute_metric_vector(pred_vec, label_vec,
                                                         PN_thresh=self.cfg.metric.PN_thresh,
                                                         TF_rel_error_rate=self.cfg.metric.TF_rel_error_rate,
                                                         TF_abs_error_thresh=self.cfg.metric.TF_abs_error_thresh)
@@ -1019,7 +1012,37 @@ if __name__ == '__main__':
     
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
-    
+
+
+    # go through each item in the dataset for displacement and compute the mean and std.
+
+    # channel 1
+    # import random
+    # num_pixels = 0
+    # sum_channels = torch.zeros(3)  # Assuming 3 channels (RGB)
+    # sum_sq_channels = torch.zeros(3)
+    # num_pixels = 0
+
+    # n = len(dataset)
+    # random_idxs = random.sample(range(n), 8000)  # Unique indices
+
+    # for i in tqdm(random_idxs, desc="Processing"):
+    #     X, y = dataset[i]
+
+    #     c, h, w = y.shape
+    #     num_pixels += h * w
+    #     sum_channels += y.sum(dim=[1, 2])
+    #     sum_sq_channels += (y ** 2).sum(dim=[1, 2])
+
+    # # Compute mean and std
+    # mean = sum_channels / num_pixels
+    # std = torch.sqrt(sum_sq_channels / num_pixels - mean ** 2)
+
+    # print("Mean:", mean.tolist())
+    # print("Std:", std.tolist())
+
+    # exit()
+
     X, y = dataset[98]
 
     # y is shape 3, 256, 256
@@ -1070,7 +1093,22 @@ if __name__ == '__main__':
     trainer = L.Trainer(max_epochs=cfg.epochs, callbacks=callbacks, logger=logger,
                         accelerator="gpu", devices=opt.gpus, strategy=strategy,
                         gradient_clip_val=cfg.gradient_clip_val, gradient_clip_algorithm=cfg.gradient_clip_algorithm)
-    
+
+
+    # load the hiera encoders if desired
+    if cfg.model.hiera.return_encoder_output:
+        for output in cfg.dataset.output_type:
+            # get the encoder path
+            if output == "cnorm":
+                encoder_path = cfg.teacher_encoders.cnorm_path
+            elif output == "disp":
+                encoder_path = cfg.teacher_encoders.disp_path
+
+        # load only the encoder
+        teacher_model = build_model(cfg)
+        teacher_model.load_from_pretrained_model(encoder_path)   
+
+
     # only load states for finetuning and model is densenet
     if opt.finetune and "densenet" in cfg.model.name:
         model_state = torch.load(opt.ckpt_path)

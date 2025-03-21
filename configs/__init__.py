@@ -15,6 +15,14 @@ cfg.scale = 1.
 cfg.gradient_clip_val = None
 cfg.gradient_clip_algorithm = None
 
+
+cfg.teacher_encoders = CN()
+cfg.teacher_encoders.disp_path = ''
+cfg.teacher_encoders.stress_path = ''
+cfg.teacher_encoders.stress2_path = ''
+cfg.teacher_encoders.cnorm_path = ''
+cfg.teacher_encoders.area_shear_path = ''
+
 cfg.scales = CN()
 cfg.scales.disp = 1.
 cfg.scales.depth = 1.
@@ -22,7 +30,6 @@ cfg.scales.stress = 1.
 cfg.scales.stress2 = 1.
 cfg.scales.cnorm = 1.
 cfg.scales.area_shear = 1.
-
 
 cfg.unit_scales = CN()
 cfg.unit_scales.disp = 1.
@@ -81,6 +88,10 @@ cfg.model.hiera.decoder_depth_per_stage = 4
 # for Vanilla model (decoder = "Vanilla")
 cfg.model.hiera.decoder_num_heads = 1
 cfg.model.hiera.decoder_depth = 3
+
+
+# returning the encoder output in hiera
+cfg.model.hiera.return_encoder_output = False
 
 cfg.dataset = CN()
 cfg.dataset.output_type = []

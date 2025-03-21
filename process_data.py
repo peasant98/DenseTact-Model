@@ -58,14 +58,22 @@ sample_id = manager.Value('i', 0)
 sample_id_lock = manager.Lock()
 
 
-STRESS1_MEANS = [-0.00228839, -0.00501893, -0.00231929]
-STRESS1_STDS = [0.00511871, 0.00739775, 0.00576505]
+DISP_MEANS = [-0.17508025467395782, -0.8888664841651917, -0.12558214366436005]
+DISP_STDS = [0.5062088370323181, 1.4978240728378296, 0.44729936122894287]
+
+FORCE_MEANS = [-0.0026451176963746548, -0.010370887815952301, -0.002843874040991068]
+FORCE_STDS =  [0.0008145869709551334, 0.0002247917652130127, 0.00009318174794316292]
+
+STRESS1_MEANS =  [-0.017115609720349312, -0.02853190153837204, -0.01735331304371357]
+STRESS1_STDS = [0.03661240264773369, 0.05918154492974281, 0.03791118785738945]
 
 def normalize_item(item, channel_means, channel_stds):
     """
     Normalize a single item with shape (H, W, C).
     """
-    normalized_item = (item - channel_means[None, None, :]) / channel_stds[None, None, :]
+    # normalized_item = (item - channel_means[None, None, :]) / channel_stds[None, None, :]
+    normalized_item = (item - channel_means[None, None, :])
+
     return normalized_item
 
 def write_data(file_path, data, is_X = True, bounds_dict=None):
@@ -513,41 +521,43 @@ class FullDataset(Dataset):
                 data_pack.append(y)
 
             elif t == 'cnorm':
-                cnorm_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/cnorm.png')
+                cnorm_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/cnforce_local.png')
                 cnorm_img = cv2.cvtColor(cnorm_img, cv2.COLOR_BGR2RGB)
-                x1 = ((cnorm_img[:,:,0] / 255.0) * (bounds['CNORM']['max_val_r'] - bounds['CNORM']['min_val_r'])) + bounds['CNORM']['min_val_r']
-                x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['CNORM']['max_val_g'] - bounds['CNORM']['min_val_g'])) + bounds['CNORM']['min_val_g']
-                x3 = ((cnorm_img[:,:,2] / 255.0) * (bounds['CNORM']['max_val_b'] - bounds['CNORM']['min_val_b'])) + bounds['CNORM']['min_val_b']
+                x1 = ((cnorm_img[:,:,0] / 255.0) * (bounds['cnforce_local']['max_val_r'] - bounds['cnforce_local']['min_val_r'])) + bounds['cnforce_local']['min_val_r']
+                x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['cnforce_local']['max_val_g'] - bounds['cnforce_local']['min_val_g'])) + bounds['cnforce_local']['min_val_g']
+                x3 = ((cnorm_img[:,:,2] / 255.0) * (bounds['cnforce_local']['max_val_b'] - bounds['cnforce_local']['min_val_b'])) + bounds['cnforce_local']['min_val_b']
                 cnorm = np.stack([x1, x2, x3], axis=2)
                 # apply self.mask to cnorm
-                cnorm = cnorm * self.output_mask[:,:,np.newaxis]
+                # cnorm = cnorm * self.output_mask[:,:,np.newaxis]
+                if self.normalization:
+                    cnorm = normalize_item(cnorm, np.array(FORCE_MEANS), np.array(FORCE_STDS))
+
                 data_pack.append(cnorm)
         
             elif t == 'stress1':
                 # process stress1
-                stress1_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress1.png')
+                stress1_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/nforce_local.png')
                 stress1_img = cv2.cvtColor(stress1_img, cv2.COLOR_BGR2RGB)
-                x1 = ((stress1_img[:,:,0] / 255.0) * (bounds['S11']['max_val_r'] - bounds['S11']['min_val_r'])) + bounds['S11']['min_val_r']
-                x2 = ((stress1_img[:,:,1] / 255.0) * (bounds['S11']['max_val_g'] - bounds['S11']['min_val_g'])) + bounds['S11']['min_val_g']
-                x3 = ((stress1_img[:,:,2] / 255.0) * (bounds['S11']['max_val_b'] - bounds['S11']['min_val_b'])) + bounds['S11']['min_val_b']
+                x1 = ((stress1_img[:,:,0] / 255.0) * (bounds['nforce_local']['max_val_r'] - bounds['nforce_local']['min_val_r'])) + bounds['nforce_local']['min_val_r']
+                x2 = ((stress1_img[:,:,1] / 255.0) * (bounds['nforce_local']['max_val_g'] - bounds['nforce_local']['min_val_g'])) + bounds['nforce_local']['min_val_g']
+                x3 = ((stress1_img[:,:,2] / 255.0) * (bounds['nforce_local']['max_val_b'] - bounds['nforce_local']['min_val_b'])) + bounds['nforce_local']['min_val_b']
                 stress1 = np.stack([x1, x2, x3], axis=2)
-                stress1 = stress1 * self.output_mask[:,:,np.newaxis]
                 
                 # perform normalization if desired
-                if self.normalization:
-                    stress1 = normalize_item(stress1, np.array(STRESS1_MEANS), np.array(STRESS1_STDS))
+                # if self.normalization:
+                #     stress1 = normalize_item(stress1, np.array(DISP_MEANS), np.array(DISP_STDS))
                 
                 data_pack.append(stress1)
             
             elif t == 'stress2':
                 # process stress2
-                stress2_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress2.png')
+                stress2_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/sforce_local.png')
                 stress2_img = cv2.cvtColor(stress2_img, cv2.COLOR_BGR2RGB)
-                x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['S12']['max_val_r'] - bounds['S12']['min_val_r'])) + bounds['S12']['min_val_r']
-                x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['S12']['max_val_g'] - bounds['S12']['min_val_g'])) + bounds['S12']['min_val_g']
-                x3 = ((stress2_img[:,:,2] / 255.0) * (bounds['S12']['max_val_b'] - bounds['S12']['min_val_b'])) + bounds['S12']['min_val_b']
+                x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['sforce_local']['max_val_r'] - bounds['sforce_local']['min_val_r'])) + bounds['sforce_local']['min_val_r']
+                x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['sforce_local']['max_val_g'] - bounds['sforce_local']['min_val_g'])) + bounds['sforce_local']['min_val_g']
+                x3 = ((stress2_img[:,:,2] / 255.0) * (bounds['sforce_local']['max_val_b'] - bounds['sforce_local']['min_val_b'])) + bounds['sforce_local']['min_val_b']
                 stress2 = np.stack([x1, x2, x3], axis=2)
-                stress2 = stress2 * self.output_mask[:, :, np.newaxis]
+                # stress2 = stress2 * self.output_mask[:, :, np.newaxis]
                 data_pack.append(stress2)
 
             elif t == 'disp':
@@ -562,17 +572,21 @@ class FullDataset(Dataset):
                 x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['disp_local']['max_val_g'] - bounds['disp_local']['min_val_g'])) + bounds['disp_local']['min_val_g']
                 x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['disp_local']['max_val_b'] - bounds['disp_local']['min_val_b'])) + bounds['disp_local']['min_val_b']
                 displacement = np.stack([x1, x2, x3], axis=2)
+
+                if self.normalization:
+                    displacement = normalize_item(displacement, np.array(DISP_MEANS), np.array(DISP_STDS))
+
                 data_pack.append(displacement)
 
             elif t == "shear":
                 # process area shear
-                area_shear_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/area_shear.png')
+                area_shear_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/csforce_local.png')
                 area_shear_img = cv2.cvtColor(area_shear_img, cv2.COLOR_BGR2RGB)
-                x1 = ((area_shear_img[:,:,0] / 255.0) * (bounds['CNAREA']['max_val_r'] - bounds['CNAREA']['min_val_r'])) + bounds['CNAREA']['min_val_r']
-                x2 = ((area_shear_img[:,:,1] / 255.0) * (bounds['CNAREA']['max_val_g'] - bounds['CNAREA']['min_val_g'])) + bounds['CNAREA']['min_val_g']
-                x3 = ((area_shear_img[:,:,2] / 255.0) * (bounds['CNAREA']['max_val_b'] - bounds['CNAREA']['min_val_b'])) + bounds['CNAREA']['min_val_b']
+                x1 = ((area_shear_img[:,:,0] / 255.0) * (bounds['csforce_local']['max_val_r'] - bounds['csforce_local']['min_val_r'])) + bounds['csforce_local']['min_val_r']
+                x2 = ((area_shear_img[:,:,1] / 255.0) * (bounds['csforce_local']['max_val_g'] - bounds['csforce_local']['min_val_g'])) + bounds['csforce_local']['min_val_g']
+                x3 = ((area_shear_img[:,:,2] / 255.0) * (bounds['csforce_local']['max_val_b'] - bounds['csforce_local']['min_val_b'])) + bounds['csforce_local']['min_val_b']
                 area_shear = np.stack([x1, x2, x3], axis=2)
-                area_shear = area_shear * self.output_mask[:,:,np.newaxis]
+                # area_shear = area_shear   * self.output_mask[:,:,np.newaxis]
                 data_pack.append(area_shear)
 
         if len(data_pack) > 0:
