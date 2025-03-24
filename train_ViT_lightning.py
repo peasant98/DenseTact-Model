@@ -274,6 +274,9 @@ class LightningDTModel(L.LightningModule):
         self.smooth_l1_loss = nn.SmoothL1Loss()
         # this should be set in the config
         self.beta = 0.9
+
+    def set_teacher_encoders(self, teacher_encoders_dict):
+        self.teacher_encoders_dict = teacher_encoders_dict
         
     def set_student_encoders(self, student_encoders):
         self.student_encoders = student_encoders
@@ -335,7 +338,9 @@ class LightningDTModel(L.LightningModule):
                 # get l1 loss between student_pred and z
                 z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
         if self.cfg.model.hiera.return_encoder_output:
-            pass              
+            # go through the teachers 
+            pass             
+        
         loss = z_loss
         # cosine similarity between the predicted and target vectors
         # todo -- have this be between positive vectors
@@ -1005,8 +1010,13 @@ if __name__ == '__main__':
         transforms.ToTensor(),
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
+
+    extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
+                          '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
+                          '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
     
     dataset = FullDataset(cfg, transform=transform, 
+                          extra_samples_dirs=extra_samples_dirs,
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     
     
@@ -1098,6 +1108,7 @@ if __name__ == '__main__':
 
 
     # load the hiera encoders if desired
+    teacher_models = {}
     if cfg.model.hiera.return_encoder_output:
         for output in cfg.dataset.output_type:
             # get the encoder path
@@ -1105,10 +1116,20 @@ if __name__ == '__main__':
                 encoder_path = cfg.teacher_encoders.cnorm_path
             elif output == "disp":
                 encoder_path = cfg.teacher_encoders.disp_path
+            elif output == "shear":
+                encoder_path = cfg.teacher_encoders.area_shear_path
+            elif output == "stress1":
+                encoder_path = cfg.teacher_encoders.stress_path
+            elif output == "stress2":
+                encoder_path = cfg.teacher_encoders.stress2_path
 
-        # load only the encoder
-        teacher_model = build_model(cfg)
-        teacher_model.load_from_pretrained_model(encoder_path)   
+            # load only the encoder
+            teacher_model = build_model(cfg)
+            teacher_model.load_from_pretrained_model(encoder_path)   
+            teacher_models[output] = teacher_model
+
+        # add teacher encoders!
+        calibration_model.set_teacher_encoders(teacher_models)
 
 
     # only load states for finetuning and model is densenet

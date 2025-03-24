@@ -227,11 +227,18 @@ class FullDataset(Dataset):
         self.extra_samples_dirs = extra_samples_dirs
         self.is_mae = is_mae
 
+        self.folder_with_idx = []
+        self.folder_with_idx.append((0, self.samples_dir))
+        length = sum(os.path.isdir(os.path.join(self.samples_dir, name)) for name in os.listdir(self.samples_dir)) / 2
+        for dir in extra_samples_dirs:
+            self.folder_with_idx.append((int(length), dir))
+            length += (sum(os.path.isdir(os.path.join(dir, name)) for name in os.listdir(dir)) / 2)
+
         self.color_jitter = transforms.ColorJitter(
             brightness=0.25,
             contrast=0.25,
             saturation=0.25,
-            hue=0.05
+            hue=0.02
         )
 
         for t in opt.dataset.output_type:
@@ -506,6 +513,10 @@ class FullDataset(Dataset):
         
         length = sum(os.path.isdir(os.path.join(self.samples_dir, name)) for name in os.listdir(self.samples_dir)) / 2
         
+        for dir in self.extra_samples_dirs:
+            # add to the length
+            length = int(length)
+            length += (sum(os.path.isdir(os.path.join(dir, name)) for name in os.listdir(dir)) / 2)
         # augment data with rotations by 90 degrees
         self.length = int(length)
         
@@ -543,13 +554,23 @@ class FullDataset(Dataset):
     def __getitem__(self, idx):
         """Get item in dataset. Will get either depth or whole output suite"""
         
-        sample_num = int((idx % (self.length / 4)) + 1)
-        augmentation_num = int((idx // (self.length / 4)))
-        sample_num = idx + 1
+
+        # based on sample idx, compute which folder to look in
+        for folder_item in sorted(self.folder_with_idx)[::-1]:
+            folder_start_idx = folder_item[0]
+            folder_name = folder_item[1]
+
+            if idx >= folder_start_idx:
+                # got the folder, get the sample num in the folder now
+                sample_num = idx - folder_start_idx
+                samples_dir = folder_name
+                break
+
+        sample_num = sample_num + 1
         
         # read deformed and undeformed images
-        deformed_img_norm = cv2.imread(f'{self.samples_dir}/X{sample_num}/deformed.png')
-        undeformed_img_norm = cv2.imread(f'{self.samples_dir}/X{sample_num}/undeformed.png')
+        deformed_img_norm = cv2.imread(f'{samples_dir}/X{sample_num}/deformed.png')
+        undeformed_img_norm = cv2.imread(f'{samples_dir}/X{sample_num}/undeformed.png')
         
         deformed_img_norm = cv2.cvtColor(deformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
         undeformed_img_norm = cv2.cvtColor(undeformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
@@ -581,16 +602,16 @@ class FullDataset(Dataset):
             return X, y
         
         # load bounds json only if it exists
-        bounds_exists = os.path.exists(f'{self.samples_dir}/y{sample_num}/bounds.json')
+        bounds_exists = os.path.exists(f'{samples_dir}/y{sample_num}/bounds.json')
         if bounds_exists:
-            with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
+            with open(f'{samples_dir}/y{sample_num}/bounds.json') as f:
                 bounds = json.load(f)
 
         for t in self.output_type:
            
             if t == 'depth':
                 # process depth
-                relative_depth = cv2.imread(f'{self.samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
+                relative_depth = cv2.imread(f'{samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
                 relative_depth = relative_depth / 10000.0
                 relative_depth = relative_depth - 1 
                 y = relative_depth
@@ -598,7 +619,7 @@ class FullDataset(Dataset):
                 data_pack.append(y)
 
             elif t == 'cnorm':
-                cnorm_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/cnforce_local.png')
+                cnorm_img = cv2.imread(f'{samples_dir}/y{sample_num}/cnforce_local.png')
                 cnorm_img = cv2.cvtColor(cnorm_img, cv2.COLOR_BGR2RGB)
                 x1 = ((cnorm_img[:,:,0] / 255.0) * (bounds['cnforce_local']['max_val_r'] - bounds['cnforce_local']['min_val_r'])) + bounds['cnforce_local']['min_val_r']
                 x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['cnforce_local']['max_val_g'] - bounds['cnforce_local']['min_val_g'])) + bounds['cnforce_local']['min_val_g']
@@ -613,7 +634,7 @@ class FullDataset(Dataset):
         
             elif t == 'stress1':
                 # process stress1
-                stress1_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/nforce_local.png')
+                stress1_img = cv2.imread(f'{samples_dir}/y{sample_num}/nforce_local.png')
                 stress1_img = cv2.cvtColor(stress1_img, cv2.COLOR_BGR2RGB)
                 x1 = ((stress1_img[:,:,0] / 255.0) * (bounds['nforce_local']['max_val_r'] - bounds['nforce_local']['min_val_r'])) + bounds['nforce_local']['min_val_r']
                 x2 = ((stress1_img[:,:,1] / 255.0) * (bounds['nforce_local']['max_val_g'] - bounds['nforce_local']['min_val_g'])) + bounds['nforce_local']['min_val_g']
@@ -628,7 +649,7 @@ class FullDataset(Dataset):
             
             elif t == 'stress2':
                 # process stress2
-                stress2_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/sforce_local.png')
+                stress2_img = cv2.imread(f'{samples_dir}/y{sample_num}/sforce_local.png')
                 stress2_img = cv2.cvtColor(stress2_img, cv2.COLOR_BGR2RGB)
                 x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['sforce_local']['max_val_r'] - bounds['sforce_local']['min_val_r'])) + bounds['sforce_local']['min_val_r']
                 x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['sforce_local']['max_val_g'] - bounds['sforce_local']['min_val_g'])) + bounds['sforce_local']['min_val_g']
@@ -640,7 +661,7 @@ class FullDataset(Dataset):
             elif t == 'disp':
                 # process displacement
                 # displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/displacement.png')
-                displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/disp_local.png')
+                displacement_img = cv2.imread(f'{samples_dir}/y{sample_num}/disp_local.png')
                 displacement_img = cv2.cvtColor(displacement_img, cv2.COLOR_BGR2RGB)
                 # x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['UU1']['max_val_r'] - bounds['UU1']['min_val_r'])) + bounds['UU1']['min_val_r']
                 # x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['UU1']['max_val_g'] - bounds['UU1']['min_val_g'])) + bounds['UU1']['min_val_g']
@@ -657,7 +678,7 @@ class FullDataset(Dataset):
 
             elif t == "shear":
                 # process area shear
-                area_shear_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/csforce_local.png')
+                area_shear_img = cv2.imread(f'{samples_dir}/y{sample_num}/csforce_local.png')
                 area_shear_img = cv2.cvtColor(area_shear_img, cv2.COLOR_BGR2RGB)
                 x1 = ((area_shear_img[:,:,0] / 255.0) * (bounds['csforce_local']['max_val_r'] - bounds['csforce_local']['min_val_r'])) + bounds['csforce_local']['min_val_r']
                 x2 = ((area_shear_img[:,:,1] / 255.0) * (bounds['csforce_local']['max_val_g'] - bounds['csforce_local']['min_val_g'])) + bounds['csforce_local']['min_val_g']

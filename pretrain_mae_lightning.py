@@ -124,9 +124,9 @@ if __name__ == '__main__':
     
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=32)
-    arg.add_argument('--num_workers', type=int, default=20)
+    arg.add_argument('--num_workers', type=int, default=16)
     arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="DT_Ultra_es4t_mae")
+    arg.add_argument('--exp_name', type=str, default="DT_Ultra_es")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     
@@ -142,9 +142,15 @@ if __name__ == '__main__':
         transforms.Resize((256, 256), antialias=True),
     ])
     
-    
-    dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, is_real_world=opt.real_world, is_mae=True)
+
+    extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
+                          '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
+                          '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
+    dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, 
+                          extra_samples_dirs=extra_samples_dirs,
+                          is_real_world=opt.real_world, is_mae=True)
     print("Dataset total samples: {}".format(len(dataset)))
+
     full_dataset_length = len(dataset)
     
     # take only 10 percent of dataset for train and test

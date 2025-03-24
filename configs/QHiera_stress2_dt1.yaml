@@ -4,23 +4,15 @@ scale: 1.0
 epochs: 200
 
 scales:
-  disp: 10.
-  cnorm: 1000.
-  stress: 1000.
   stress2: 1000.
-  area_shear: 1000.
 
 unit_scales:
-  disp: 1000.
-  cnorm: 1.
-  stress: 1.
   stress2: 1.
-  area_shear: 1.
 
 model:
   name: HieraDPT
-  out_chans: [3, 3, 3, 3, 3]
-  pretrained_model: "DT_Ultra_es/checkpoints/last.ckpt"
+  out_chans: [3]
+  pretrained_model: "DT_Ultra_1/checkpoints/last.ckpt"
   LoRA: True
 
   hiera:
@@ -30,8 +22,7 @@ model:
     decoder_depth: 8
 
 dataset:
-  output_type: ["disp", "cnorm", "stress1", "stress2", "shear"]
-  normalization: False
+  output_type: ["stress2"]
 
 optimizer:
   name: AdamW
