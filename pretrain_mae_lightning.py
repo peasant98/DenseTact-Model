@@ -125,8 +125,8 @@ if __name__ == '__main__':
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=32)
     arg.add_argument('--num_workers', type=int, default=16)
-    arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="DT_Ultra_es")
+    arg.add_argument('--mask_ratio', type=float, default=0.4)
+    arg.add_argument('--exp_name', type=str, default="DT_Ultra_es_4")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     
