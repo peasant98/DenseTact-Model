@@ -560,6 +560,7 @@ class HieraQUpsampingDecoder(nn.Module):
         x = x.permute(0, 3, 1, 2)     # (B, C, H, W)
         
         pred = []
+        # maybe output z as x here?
         for spatial_decoder in self.spatial_decoders:
             pred.append(spatial_decoder(x))
         pred = torch.cat(pred, dim=1)
