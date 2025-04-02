@@ -49,6 +49,50 @@ def apply_colormap(depth_map, cmap='viridis'):
     depth_map_colored = (depth_map_colored * 255).astype(np.uint8)  # Convert to 8-bit image
     return depth_map_colored
 
+
+class LogScaleMSELoss(nn.Module):
+    """
+    Mean Squared Error loss in log space to handle very small values effectively.
+    
+    This loss transforms both predictions and targets to logarithmic space before
+    computing MSE, making it more sensitive to small values.
+    
+    Args:
+        epsilon (float): Small constant added to prevent log(0) issues. Default: 1e-6
+        reduction (str): Specifies the reduction to apply to the output:
+            'none' | 'mean' | 'sum'. Default: 'mean'
+    """
+    def __init__(self, epsilon=1e-6, reduction='mean'):
+        super(LogScaleMSELoss, self).__init__()
+        self.epsilon = epsilon
+        self.reduction = reduction
+    
+    def forward(self, pred, target):
+        """
+        Args:
+            pred (Tensor): The prediction tensor
+            target (Tensor): The target tensor
+            
+        Returns:
+            Tensor: The computed loss
+        """
+        # Apply sign-preserving log transform
+        log_pred = torch.sign(pred) * torch.log(torch.abs(pred) + self.epsilon)
+        log_target = torch.sign(target) * torch.log(torch.abs(target) + self.epsilon)
+        
+        # Compute MSE in log space
+        squared_diff = (log_pred - log_target) ** 2
+        
+        # Apply reduction
+        if self.reduction == 'none':
+            return squared_diff
+        elif self.reduction == 'sum':
+            return torch.sum(squared_diff)
+        elif self.reduction == 'mean':
+            return torch.mean(squared_diff)
+        else:
+            raise ValueError(f"Invalid reduction mode: {self.reduction}")
+
 class EdgeAwareL1Loss(nn.Module):
     def __init__(self, alpha=1.0):
         super(EdgeAwareL1Loss, self).__init__()
@@ -233,7 +277,7 @@ class LightningDTModel(L.LightningModule):
             self.criterion = L1WithGradientLoss()
         else:
             raise NotImplementedError("Loss not implemented {}".format(cfg.model.loss))
-        
+
         # get channel information
         total_output_channels = sum(self.cfg.model.out_chans)
         dataset_output_type = cfg.dataset.output_type
@@ -337,20 +381,21 @@ class LightningDTModel(L.LightningModule):
                 
                 # get l1 loss between student_pred and z
                 z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
+                
         if self.cfg.model.hiera.return_encoder_output:
             # go through the teachers 
-            pass             
+            for key in self.teacher_encoders_dict.keys():
+                teacher_model = self.teacher_encoders_dict[key]
+                # run inference
+                student_z, output = teacher_model(X)
+
+                cosine_loss = (1 - F.cosine_similarity(student_z, z, dim=1).mean())
+                smooth_l1_loss = self.smooth_l1_loss(student_z, z)
+                
+                # get l1 loss between student_pred and z
+                z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
         
         loss = z_loss
-        # cosine similarity between the predicted and target vectors
-        # todo -- have this be between positive vectors
-        # cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
-        # # compute one scalar value for the cosine similarity
-        # cosine_similarity = torch.mean(cosine_similarity_group)
-        # cosine_loss = 1 - cosine_similarity
-        # loss += (0 * cosine_loss) 
-        # self.log('train/loss', loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
-
         total_loss = 0. 
         predict_dict = self._process_prediction(pred)
         label_dict = self._process_prediction(Y)
@@ -377,7 +422,6 @@ class LightningDTModel(L.LightningModule):
                 scale = self.cfg.scales.area_shear
             
             if name == 'depth':
-                
                 # if the label_dict is below a very small threshold, have the loss be weighted small
                 loss = 0
                 for item in label_dict[name]:
@@ -676,11 +720,9 @@ class LightningDTModel(L.LightningModule):
                     X0 = X[i].detach().clone()
                     gt_def = X0[:3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
                     gt_undef = X0[3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
-                    gt_diff = X0[[6], :, :].detach().cpu().numpy()
                     
                     self.logger.experiment.add_image(f'{name}/gt/deform_color_{i}', gt_def, self.global_step)
                     self.logger.experiment.add_image(f'{name}/gt/undeform_color_{i}', gt_undef, self.global_step)
-                    self.logger.experiment.add_image(f'{name}/gt/diff_color_{i}', gt_diff, self.global_step)
                     
                     gt_depth = Y[i].detach().clone()
                     gt_depth = gt_depth.cpu().numpy()
@@ -1019,46 +1061,10 @@ if __name__ == '__main__':
                           extra_samples_dirs=extra_samples_dirs,
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     
-    
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
-
     # go through some samples in the dataset
     X, y = dataset[100]
-
-    # go through each item in the dataset for displacement and compute the mean and std.
-
-    # channel 1
-    # import random
-    # num_pixels = 0
-    # sum_channels = torch.zeros(3)  # Assuming 3 channels (RGB)
-    # sum_sq_channels = torch.zeros(3)
-    # num_pixels = 0
-
-    # n = len(dataset)
-    # random_idxs = random.sample(range(n), 8000)  # Unique indices
-
-    # for i in tqdm(random_idxs, desc="Processing"):
-    #     X, y = dataset[i]
-
-    #     c, h, w = y.shape
-    #     num_pixels += h * w
-    #     sum_channels += y.sum(dim=[1, 2])
-    #     sum_sq_channels += (y ** 2).sum(dim=[1, 2])
-
-    # # Compute mean and std
-    # mean = sum_channels / num_pixels
-    # std = torch.sqrt(sum_sq_channels / num_pixels - mean ** 2)
-
-    # print("Mean:", mean.tolist())
-    # print("Std:", std.tolist())
-
-    # exit()
-
-    X, y = dataset[98]
-
-    # y is shape 3, 256, 256
-    # save to image
     
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
     train_size = int(0.85 * dataset_length)
