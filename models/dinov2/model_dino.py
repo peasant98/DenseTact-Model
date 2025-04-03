@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.utils.checkpoint
 from torch.nn.init import trunc_normal_
 
-from tactile_ssl.utils import apply_masks
+from .utils import apply_masks
 
 from .layers import MemEffAttention, Mlp
 from .layers import NestedTensorBlock as Block
