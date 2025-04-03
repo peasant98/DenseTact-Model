@@ -7,7 +7,10 @@
 #   https://github.com/facebookresearch/dino/blob/master/vision_transformer.py
 #   https://github.com/rwightman/pytorch-image-models/tree/master/timm/layers/patch_embed.py
 
-from tactile_ssl.utils.logging import get_pylogger
+import sys
+sys.path.append('/home/arm-beast/Desktop/DenseTact-Model/models/dinov2')
+
+from utils.logging import get_pylogger
 import os
 from typing import Callable, List, Any, Tuple, Dict
 import warnings

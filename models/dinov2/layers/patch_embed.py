@@ -16,7 +16,12 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 
-from tactile_ssl.utils import create_ndgrid
+
+# add /home/arm-beast/Desktop/DenseTact-Model/models/dinov2 to sys.path
+import sys
+sys.path.append('/home/arm-beast/Desktop/DenseTact-Model/models/dinov2')
+
+from utils import create_ndgrid
 
 
 def make_2tuple(x):

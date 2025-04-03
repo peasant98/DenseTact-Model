@@ -16,7 +16,11 @@ from torch import nn
 
 import torch
 import torch.nn.functional as F
-from tactile_ssl.model.layers.mlp import Mlp as MLP
+
+import sys
+sys.path.append('/home/arm-beast/Desktop/DenseTact-Model/models/dinov2')
+
+from layers.mlp import Mlp as MLP
 
 
 logger = logging.getLogger("dinov2")

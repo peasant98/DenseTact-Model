@@ -12,11 +12,11 @@ import torch.nn as nn
 import torch.utils.checkpoint
 from torch.nn.init import trunc_normal_
 
-from .utils import apply_masks
+from utils import apply_masks
 
-from .layers import MemEffAttention, Mlp
-from .layers import NestedTensorBlock as Block
-from .layers import PatchEmbed, PatchEmbed3D, SinusoidalEmbed, SwiGLUFFNFused
+from layers import MemEffAttention, Mlp
+from layers import NestedTensorBlock as Block
+from layers import PatchEmbed, PatchEmbed3D, SinusoidalEmbed, SwiGLUFFNFused
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +190,8 @@ class VisionTransformer(nn.Module):
             ffn_layer = f
         else:
             raise NotImplementedError
+
+
 
         blocks_list = [
             block_fn(
@@ -599,3 +601,15 @@ VIT_EMBED_DIMS = {
     'vit_large': 1024,
     'vit_giant2': 1536,
 }
+
+
+if __name__ == '__main__':
+    model = vit_base()
+
+    # send to cuda
+    model = model.cuda()
+
+    x = torch.randn(2, 3, 224, 224)
+    x = x.cuda()
+    x = model(x)
+    print(x.shape)
