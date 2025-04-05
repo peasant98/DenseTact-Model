@@ -37,9 +37,7 @@ from configs import get_cfg_defaults
 from models import build_model, replace_LoRA, MonkeyPatchLoRALinear, HieraDPT
 from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
-
 from models.dense import DecoderNHead
-
 from tqdm import tqdm
 
 def apply_colormap(depth_map, cmap='viridis'):  
@@ -48,50 +46,6 @@ def apply_colormap(depth_map, cmap='viridis'):
     depth_map_colored = colormap(depth_map_normalized)[:, :, :3]  # Get RGB values, ignore alpha channel
     depth_map_colored = (depth_map_colored * 255).astype(np.uint8)  # Convert to 8-bit image
     return depth_map_colored
-
-
-class LogScaleMSELoss(nn.Module):
-    """
-    Mean Squared Error loss in log space to handle very small values effectively.
-    
-    This loss transforms both predictions and targets to logarithmic space before
-    computing MSE, making it more sensitive to small values.
-    
-    Args:
-        epsilon (float): Small constant added to prevent log(0) issues. Default: 1e-6
-        reduction (str): Specifies the reduction to apply to the output:
-            'none' | 'mean' | 'sum'. Default: 'mean'
-    """
-    def __init__(self, epsilon=1e-6, reduction='mean'):
-        super(LogScaleMSELoss, self).__init__()
-        self.epsilon = epsilon
-        self.reduction = reduction
-    
-    def forward(self, pred, target):
-        """
-        Args:
-            pred (Tensor): The prediction tensor
-            target (Tensor): The target tensor
-            
-        Returns:
-            Tensor: The computed loss
-        """
-        # Apply sign-preserving log transform
-        log_pred = torch.sign(pred) * torch.log(torch.abs(pred) + self.epsilon)
-        log_target = torch.sign(target) * torch.log(torch.abs(target) + self.epsilon)
-        
-        # Compute MSE in log space
-        squared_diff = (log_pred - log_target) ** 2
-        
-        # Apply reduction
-        if self.reduction == 'none':
-            return squared_diff
-        elif self.reduction == 'sum':
-            return torch.sum(squared_diff)
-        elif self.reduction == 'mean':
-            return torch.mean(squared_diff)
-        else:
-            raise ValueError(f"Invalid reduction mode: {self.reduction}")
 
 class EdgeAwareL1Loss(nn.Module):
     def __init__(self, alpha=1.0):
@@ -277,7 +231,7 @@ class LightningDTModel(L.LightningModule):
             self.criterion = L1WithGradientLoss()
         else:
             raise NotImplementedError("Loss not implemented {}".format(cfg.model.loss))
-
+        
         # get channel information
         total_output_channels = sum(self.cfg.model.out_chans)
         dataset_output_type = cfg.dataset.output_type
@@ -381,21 +335,20 @@ class LightningDTModel(L.LightningModule):
                 
                 # get l1 loss between student_pred and z
                 z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
-                
         if self.cfg.model.hiera.return_encoder_output:
             # go through the teachers 
-            for key in self.teacher_encoders_dict.keys():
-                teacher_model = self.teacher_encoders_dict[key]
-                # run inference
-                student_z, output = teacher_model(X)
-
-                cosine_loss = (1 - F.cosine_similarity(student_z, z, dim=1).mean())
-                smooth_l1_loss = self.smooth_l1_loss(student_z, z)
-                
-                # get l1 loss between student_pred and z
-                z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
+            pass             
         
         loss = z_loss
+        # cosine similarity between the predicted and target vectors
+        # todo -- have this be between positive vectors
+        # cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
+        # # compute one scalar value for the cosine similarity
+        # cosine_similarity = torch.mean(cosine_similarity_group)
+        # cosine_loss = 1 - cosine_similarity
+        # loss += (0 * cosine_loss) 
+        # self.log('train/loss', loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
         total_loss = 0. 
         predict_dict = self._process_prediction(pred)
         label_dict = self._process_prediction(Y)
@@ -422,6 +375,7 @@ class LightningDTModel(L.LightningModule):
                 scale = self.cfg.scales.area_shear
             
             if name == 'depth':
+                
                 # if the label_dict is below a very small threshold, have the loss be weighted small
                 loss = 0
                 for item in label_dict[name]:
@@ -1024,7 +978,7 @@ def construct_student_encoders(encoder_paths, calibration_model):
 
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
-    arg.add_argument('--gpus', type=int, default=4)
+    arg.add_argument('--gpus', type=int, default=2)
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
@@ -1037,6 +991,7 @@ if __name__ == '__main__':
     arg.add_argument('--real_world', action='store_true')
     opt = arg.parse_args()    
     
+
     # load config
     cfg = get_cfg_defaults()
     cfg.merge_from_file(opt.config)
@@ -1053,18 +1008,62 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
 
-    extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
-                          '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
-                          '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
+    extra_samples_dirs = ['/home/arm-beast/Downloads/es1t/dataset_local/', 
+                          '/home/arm-beast/Downloads/es2t/dataset_local/',
+                          '/home/arm-beast/Downloads/es3t/dataset_local/']
     
     dataset = FullDataset(cfg, transform=transform, 
                           extra_samples_dirs=extra_samples_dirs,
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     
+    
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
+
     # go through some samples in the dataset
     X, y = dataset[100]
+
+    # go through each item in the dataset for displacement and compute the mean and std.
+
+    # channel 1
+    # import random
+    # channel_pixels = [[] for _ in range(3)]  # For 3 channels (RGB)
+    # n = len(dataset)
+    # random_idxs = random.sample(range(n), 500)  # Unique indices
+
+    # for i in tqdm(random_idxs, desc="Processing"):
+    #     X, y = dataset[i]
+    #     c, h, w = y.shape
+        
+    #     # For each channel, gather all pixel values from this image
+    #     for channel in range(3):
+    #         # Flatten the channel and convert to list
+    #         pixels = y[channel].flatten().tolist()
+    #         channel_pixels[channel].extend(pixels)
+
+    # # For very large datasets, sampling might be necessary to avoid memory issues
+    # # Here's an optional step to sample a manageable number of pixels
+    # max_pixels_per_channel = 1000000  # Adjust based on available memory
+    # for channel in range(3):
+    #     if len(channel_pixels[channel]) > max_pixels_per_channel:
+    #         indices = random.sample(range(len(channel_pixels[channel])), max_pixels_per_channel)
+    #         channel_pixels[channel] = [channel_pixels[channel][idx] for idx in indices]
+
+    # # Compute median for each channel
+    # median = torch.tensor([np.median(channel_pixels[i]) for i in range(3)])
+    # print("Median:", median.tolist())
+
+    # # You can still compute mean and std as before if needed
+    # mean = torch.tensor([np.mean(channel_pixels[i]) for i in range(3)])
+    # std = torch.tensor([np.std(channel_pixels[i]) for i in range(3)])
+    # print("Mean:", mean.tolist())
+    # print("Std:", std.tolist())
+    # exit()
+
+    X, y = dataset[98]
+
+    # y is shape 3, 256, 256
+    # save to image
     
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
     train_size = int(0.85 * dataset_length)

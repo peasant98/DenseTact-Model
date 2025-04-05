@@ -7,7 +7,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.transforms import Compose
 
-from models.dinov2 import DINOv2
+# add /home/arm-beast/Desktop/DenseTact-Model to path
+import sys
+sys.path.append('/home/arm-beast/Desktop/DenseTact-Model')
+
+import models
 from models.util.blocks import FeatureFusionBlock, _make_scratch
 
 # Hiera Encoder
@@ -110,6 +114,8 @@ class DPTHead(nn.Module):
             groups=1,
             expand=False,
         )
+
+        self.learnable_token = nn.Parameter(torch.randn(1, 1, in_channels))
         
         self.scratch.stem_transpose = None
         
@@ -124,9 +130,9 @@ class DPTHead(nn.Module):
         self.scratch.output_conv1 = nn.Conv2d(head_features_1, head_features_1 // 2, kernel_size=3, stride=1, padding=1)
         self.scratch.output_conv2 = nn.Sequential(
             nn.Conv2d(head_features_1 // 2, head_features_2, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(True),
+            nn.ELU(True),
             nn.Conv2d(head_features_2, output_dim, kernel_size=1, stride=1, padding=0),
-            nn.ReLU(True),
+            nn.ELU(True),
             nn.Identity(),
         )
     
@@ -139,6 +145,8 @@ class DPTHead(nn.Module):
                 x = self.readout_projects[i](torch.cat((x, readout), -1))
             else:
                 x = x[0]
+
+            # x = torch.cat([x, self.learnable_token.expand(x.size(0), 1, 768)], dim=1)
             
             x = x.permute(0, 2, 1).reshape((x.shape[0], x.shape[-1], patch_h, patch_w))
             
@@ -573,24 +581,39 @@ class DPTV2Net(nn.Module):
         img_size=256,
         patch_size=16,
         in_chans=3,
-        encoder='vitl', 
+        encoder='vit_large', 
         features=256, 
         out_channels=[256, 512, 1024, 1024], 
         out_dims=15,
         use_bn=False, 
-        use_clstoken=False
+        use_clstoken=True,
+        drop_path_rate=0.1,
+        drop_path_uniform=False,
+        init_values=None,
+        num_register_tokens=0,
     ):
         super(DPTV2Net, self).__init__()
-        
+
+
         self.intermediate_layer_idx = {
-            'vits': [2, 5, 8, 11],
-            'vitb': [2, 5, 8, 11], 
-            'vitl': [4, 11, 17, 23], 
-            'vitg': [9, 19, 29, 39]
+            'vit_small': [2, 5, 8, 11],
+            'vit_base': [2, 5, 8, 11], 
+            'vit_large': [4, 11, 17, 23], 
+            'vit_giant2': [9, 19, 29, 39]
         }
         
         self.encoder = encoder
-        self.pretrained = DINOv2(model_name=encoder, img_size=img_size, in_chans=in_chans, patch_size=patch_size)
+
+        # create dinov2 encoder
+        self.pretrained = models.dinov2_pretrain_dict[encoder](
+            img_size=(img_size, img_size),
+            patch_size=patch_size,
+            in_chans=in_chans,
+            drop_path_rate=drop_path_rate,
+            drop_path_uniform=drop_path_uniform,
+            init_values=init_values,
+            num_register_tokens=num_register_tokens
+        )
         self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, output_dim=out_dims, 
                                 out_channels=out_channels, use_clstoken=use_clstoken)
     
@@ -598,6 +621,7 @@ class DPTV2Net(nn.Module):
         patch_h, patch_w = x.shape[-2] // 16, x.shape[-1] // 16
         # extract intermediate features.
         features = self.pretrained.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder], return_class_token=True)
+
         # predictions
         depth = self.depth_head(features, patch_h, patch_w)
 
@@ -757,6 +781,37 @@ class HieraDPT(nn.Module):
 
 
 if __name__ == "__main__":
+    # Initialize the DPTV2Net model
+    model = DPTV2Net(
+        img_size=256,          # Image size
+        patch_size=16,         # Patch size
+        in_chans=3,            # Number of input channels
+        encoder='vit_base',   # Encoder type
+        features=256,          # Number of features
+        out_channels=[256, 512, 1024, 1024],  # Output channels
+        out_dims=3,           # Output dimensions
+        use_bn=False,          # Use batch normalization
+        use_clstoken=False,    # Use CLS token
+        drop_path_rate=0.1,    # Drop path rate
+        drop_path_uniform=False,  # Uniform drop path
+        init_values=1.0,      # Initialization values
+        num_register_tokens=0  # Number of register tokens
+    )
+
+    print(model)
+
+    # sample inference
+    import torch
+    import torch.nn as nn
+    import numpy as np
+
+    x = torch.randn(1, 3, 256, 256)  # Example input tensor
+    x = x.cuda()
+
+    # Load the model
+    model = model.cuda()
+    y = model(x)  # Forward pass
+    print(y.shape)  # Output shape
     from configs import get_cfg_defaults
 
     # load config

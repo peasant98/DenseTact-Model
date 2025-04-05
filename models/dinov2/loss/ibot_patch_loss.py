@@ -8,7 +8,10 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
-from tactile_ssl.utils.logging import get_pylogger
+
+import sys
+sys.path.append('/home/arm-beast/Desktop/DenseTact-Model/models/dinov2')
+from utils.logging import get_pylogger
 
 logger = get_pylogger()
 

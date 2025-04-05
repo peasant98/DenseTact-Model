@@ -23,8 +23,6 @@ import pandas as pd
 
 from tqdm import tqdm
 
-import OpenEXR
-import Imath
 
 import h5py
 
@@ -162,52 +160,13 @@ def write_data(file_path, data, is_X = True, bounds_dict=None):
             json.dump(bounds_dict, f, indent=4)
             
             
-class CombinedMAEDataset(Dataset):
-    """class for a combined dataset for Hiera/ViT pretraining."""
-    def __init__(self, dir1, dir2, transform=None):
-        """
-        Args:
-            dir1 (str): Path to the first image directory.
-            dir2 (str): Path to the second image directory.
-            transform (callable, optional): Optional transform to be applied
-                on a sample.
-        """
-        self.transform = transform
-        
-        # get list of directories in each dir
-        self.dirs1 = [os.path.join(dir1, d) for d in os.listdir(dir1) if os.path.isdir(os.path.join(dir1, d)) and 'X' in d]
-        self.dirs2 = [os.path.join(dir2, d) for d in os.listdir(dir2) if os.path.isdir(os.path.join(dir2, d)) and 'X' in d]
-
-        # Combine the lists
-        self.dir_paths = self.dirs1 + self.dirs2
-        
-        
-    def __len__(self):
-        """length of the dataset"""
-        return len(self.dir_paths)
-
-    def __getitem__(self, idx):
-        """gets an image for pretraining."""
-        # Get the image path
-        dir_path = self.dir_paths[idx]
-        img_path = f'{dir_path}/deformed.png'
-        
-        # Open the image
-        image = Image.open(img_path).convert('RGB')
-        
-        # Apply transformations if any
-        if self.transform:
-            image = self.transform(image)
-        
-        return image
-        
 class FullDataset(Dataset):
     OUTPUT_TYPES = ['depth', 'stress1', 'stress2', 'disp', 'shear', 'cnorm']
     def __init__(self,  opt, transform=None, 
                  samples_dir='../Documents/Dataset/sim_dataset', 
                  root_dir=None,
                  extra_samples_dirs=['../Documents/Dataset/sim_dataset'],
-                 is_real_world=False, is_mae=False):
+                 is_real_world=False, is_mae=False, is_dino=False):
         """
         Dataset for DenseTact Calibration task
 
@@ -226,6 +185,8 @@ class FullDataset(Dataset):
         self.normalization = opt.dataset.normalization
         self.extra_samples_dirs = extra_samples_dirs
         self.is_mae = is_mae
+        self.is_dino = is_dino
+
 
         self.folder_with_idx = []
         self.folder_with_idx.append((0, self.samples_dir))
@@ -600,6 +561,13 @@ class FullDataset(Dataset):
             X = self.transform(X).float()
             y = [0]
             return X, y
+        
+        if self.is_dino:
+            X = (deformed_img_norm, undeformed_img_norm)
+            X = np.concatenate(X, axis=2)
+            X = self.transform(X).float()
+            y = [0]
+            return {"image": X, "metadata": {"sample_id": sample_num}}
         
         # load bounds json only if it exists
         bounds_exists = os.path.exists(f'{samples_dir}/y{sample_num}/bounds.json')

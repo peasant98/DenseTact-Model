@@ -6,12 +6,31 @@ from .model_mae import mae_vit_base_patch16, mae_vit_large_patch16
 from .hiera_mae import mae_hiera_base_256, mae_hiera_base_plus_256, mae_hiera_large_256
 from .LoRA import replace_LoRA, MonkeyPatchLoRALinear
 
+import sys
+sys.path.append('/home/arm-beast/Desktop/DenseTact-Model/models/dinov2')
+
+
+from model_dino import vit_small, vit_base, vit_large, vit_giant2
+from layers.dino_head import DINOHead
+
 pretrain_dict = {
     "mae_hiera_base_256": mae_hiera_base_256,
     "mae_hiera_base_plus_256": mae_hiera_base_plus_256,
     "mae_hiera_large_256": mae_hiera_large_256,
     "mae_vit_base_patch16": mae_vit_base_patch16,
     "mae_vit_large_patch16": mae_vit_large_patch16
+}
+
+
+dinov2_pretrain_dict = {
+    "vit_small": vit_small,
+    "vit_base": vit_base,
+    "vit_large": vit_large,
+    "vit_giant2": vit_giant2,
+}
+
+dino_head_dict = {
+    "DINOHead": DINOHead
 }
 
 def build_model(cfg):

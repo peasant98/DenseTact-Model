@@ -16,12 +16,17 @@ import torch.nn.functional as F
 import torch.utils.data as data
 from omegaconf import ListConfig
 
-from dinov2.loss.dino_loss import DINOLoss
-from dinov2.loss.ibot_patch_loss import iBOTPatchLoss
-from dinov2.loss.koleo_loss import KoLeoLoss
-from dinov2.utils.ema import update_moving_average
-from dinov2.utils.logging import get_pylogger, img_logger
-from dinov2.utils import patchify_image, patches_to_image
+import sys
+sys.path.append('/home/arm-beast/Desktop/DenseTact-Model/models/dinov2')
+
+from custom_scheduler import WarmupCosineScheduler, CosineWDSchedule
+
+from loss.dino_loss import DINOLoss
+from loss.ibot_patch_loss import iBOTPatchLoss
+from loss.koleo_loss import KoLeoLoss
+from utils.ema import update_moving_average
+from utils.logging import get_pylogger, img_logger
+from utils import patchify_image, patches_to_image
 
 from xformers.ops import fmha
 
@@ -37,15 +42,11 @@ import lightning as L
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 
-from models import pretrain_dict
+from models import dinov2_pretrain_dict, dino_head_dict
 from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
-from configs import get_cfg_defaults
-
-from tactile_ssl.loss.dino_loss import DINOLoss
-from tactile_ssl.loss.ibot_patch_loss import iBOTPatchLoss
-from tactile_ssl.loss.koleo_loss import KoLeoLoss
+from pretraining_configs import get_cfg_defaults
 
 
 class LightningDTDinoV2Model(L.LightningModule):
@@ -75,6 +76,8 @@ class LightningDTDinoV2Model(L.LightningModule):
         """ MAE Model for training on the DT dataset """
         super(LightningDTDinoV2Model, self).__init__()
 
+        import pdb; pdb.set_trace()
+
         self.optim_partial = optim_cfg
         self.lr_scheduler_partial = lr_scheduler_cfg
         self.wd_scheduler_partial = wd_scheduler_cfg
@@ -92,7 +95,6 @@ class LightningDTDinoV2Model(L.LightningModule):
 
         self.generator = torch.Generator()
         self.step = -1
-
 
         # Encoders
         dino_head = partial(dino_head, in_dim=encoder.embed_dim)
@@ -134,7 +136,7 @@ class LightningDTDinoV2Model(L.LightningModule):
 
 
         self.teacher_temp_scheduler = None
-        if not isinstance(teacher_temp, float):
+        if not isinstance(teacher_temp, float) and not isinstance(teacher_temp, tuple):
             assert isinstance(teacher_temp, list) or isinstance(
                 teacher_temp, ListConfig
             )
@@ -149,6 +151,8 @@ class LightningDTDinoV2Model(L.LightningModule):
     def log_on_batch_end(
         self, outputs, stage: Literal["train", "val"] = "train", trainer_instance=None
     ):
+        
+
         if trainer_instance is not None:
             step = (
                 trainer_instance.global_step
@@ -224,16 +228,19 @@ class LightningDTDinoV2Model(L.LightningModule):
                 )
 
 
-    def on_validation_epoch_end(self, trainer_instance=None):
+    def on_validation_epoch_end(self):
         if len(self.val_reconstruction_error) > 0:
             reconstruction_error = torch.cat(self.val_reconstruction_error, dim=0)
             root_mean_square_error = torch.sqrt(torch.mean(reconstruction_error, dim=0))
             print(f"RMSE: {root_mean_square_error}")
-            trainer_instance.wandb.log({"val/rmse": root_mean_square_error})
+            self.log('val/rmse', root_mean_square_error, on_step=True, on_epoch=True, prog_bar=True, logger=True)
             self.val_reconstruction_error = []
 
 
     def _sample_block_size(self, height, width, scale):
+        """
+        sample block size given height, width and scale
+        """
         _rand = torch.rand(1, generator=self.generator).item()
         min_s, max_s = scale
         mask_scale = min_s + _rand * (max_s - min_s)
@@ -280,7 +287,7 @@ class LightningDTDinoV2Model(L.LightningModule):
                 if timeout == 0:
                     tries += 1
                     timeout = og_timeout
-                    log.warning(
+                    print(
                         f'Mask generator says: "Valid mask not found, decreasing acceptable-regions [{tries}]"'
                     )
         mask = mask.squeeze()
@@ -482,7 +489,6 @@ class LightningDTDinoV2Model(L.LightningModule):
         return dino_loss, patch_loss, koleo_loss
 
 
-
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> Dict:
 
         self.step = self.step + 1
@@ -491,6 +497,8 @@ class LightningDTDinoV2Model(L.LightningModule):
         x = batch["image"]
         global_masks, local_masks = self.sample_masks(x)
         dino_loss, ibot_loss, koleo_loss = self.forward(x, global_masks, local_masks)
+
+        # add all losses as in dino
         loss = dino_loss + ibot_loss + koleo_loss
         output = {
             "dino_loss": dino_loss.item(),
@@ -529,10 +537,10 @@ class LightningDTDinoV2Model(L.LightningModule):
             }
             optim_groups.append({"params": trainable_probe_params.values(), "lr": lr})
 
-        log.info(
+        print(
             f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
         )
-        log.info(
+        print(
             f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
         )
 
@@ -597,14 +605,50 @@ class LightningDTDinoV2Model(L.LightningModule):
             yield teacher_temp
 
 
+def sample_imgs(dataset):
+    X, y = dataset[1000]
+    deform_color = X[:3, :, :].detach().cpu().numpy()
+    undeform_color = X[3:6, :, :].detach().cpu().numpy()
+    fig, ax = plt.subplots(1, 2)
+    ax[0].imshow(deform_color.transpose(1, 2, 0))
+    ax[0].set_title("Deformed Image")
+    ax[1].imshow(undeform_color.transpose(1, 2, 0))
+    ax[1].set_title("Undeformed Image")
+    plt.savefig("sample_image.png")
+    plt.close()
+
+class DatasetOptions:
+    def __init__(self):
+        self.output_type = ['disp']
+        self.contiguous_on_direction = False
+        self.normalization = False
+
+class Opt:
+    def __init__(self):
+        self.dataset = DatasetOptions()
+        self.dataset.output_type = ['disp']
+        self.dataset.contiguous_on_direction = False
+        self.dataset.normalization = False
+
+def create_encoder(cfg):
+    encoder = dinov2_pretrain_dict[cfg.encoder.type](
+        img_size=(cfg.encoder.img_size, cfg.encoder.img_size),
+        patch_size=cfg.encoder.patch_size,
+        in_chans=cfg.encoder.in_chans,
+        drop_path_rate=cfg.encoder.drop_path_rate,
+        drop_path_uniform=cfg.encoder.drop_path_uniform,
+        init_values=cfg.encoder.init_values,
+        num_register_tokens=cfg.encoder.num_register_tokens,
+    )
+    return encoder
+
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
-    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/es4t/es4t/dataset_local/")
+    arg.add_argument('--dataset_dir', type=str, default="/home/arm-beast/Downloads/es4t/dataset_local/")
     arg.add_argument('--epochs', type=int, default=200)
-    arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
+    arg.add_argument('--config', type=str, default="pretraining_configs/config.yaml")
     arg.add_argument('--gpus', type=int, default=4)
-    
     arg.add_argument('--model', type=str, default="mae_vit_base_patch16", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=64)
     arg.add_argument('--num_workers', type=int, default=24)
@@ -624,12 +668,14 @@ if __name__ == '__main__':
         transforms.ToTensor(),
         transforms.Resize((256, 256), antialias=True),
     ])
-    
 
-    extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
-                          '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
-                          '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
-    dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, 
+
+    dataset_options = Opt()
+    
+    extra_samples_dirs = ['/home/arm-beast/Downloads/es1t/dataset_local/', 
+                          '/home/arm-beast/Downloads/es2t/dataset_local/',
+                          '/home/arm-beast/Downloads/es3t/dataset_local/']
+    dataset = FullDataset(dataset_options, transform=transform, samples_dir=opt.dataset_dir, 
                           extra_samples_dirs=extra_samples_dirs,
                           is_real_world=opt.real_world, is_mae=True)
     print("Dataset total samples: {}".format(len(dataset)))
@@ -643,27 +689,50 @@ if __name__ == '__main__':
     
     train_dataset, test_dataset, _ = random_split(dataset, [train_size, test_size, full_dataset_length - dataset_length])
     print(f"Train dataset length: {len(train_dataset)}, Test dataset length: {len(test_dataset)}")
-    
-    X, y = dataset[1000]
-    deform_color = X[:3, :, :].detach().cpu().numpy()
-    undeform_color = X[3:6, :, :].detach().cpu().numpy()
-    fig, ax = plt.subplots(1, 2)
-    ax[0].imshow(deform_color.transpose(1, 2, 0))
-    ax[0].set_title("Deformed Image")
-    ax[1].imshow(undeform_color.transpose(1, 2, 0))
-    ax[1].set_title("Undeformed Image")
-    plt.savefig("sample_image.png")
-    plt.close()
+    sample_imgs(train_dataset)
+
     
     dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers)
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=True, num_workers=12)
+
+    # 1. Create encoder
+    encoder = create_encoder(cfg)
+
+    # 2. Create dino head
+    dino_head = partial(
+        dino_head_dict[cfg.dino_head.type],
+        out_dim=cfg.dino_head.out_dim,)
     
-    calibration_model = LightningDTModel(
-        model_name=opt.model, 
-        num_epochs=opt.epochs,
-        total_steps=opt.epochs * len(train_dataset),
-        mask_ratio=opt.mask_ratio,
-        learning_rate=8e-4
+    # 3. Create optimizers
+    optim_cfg = partial(
+        torch.optim.AdamW,
+        lr=cfg.optim_cfg.lr,
+        weight_decay=cfg.optim_cfg.weight_decay)
+    
+    # 4. Create schedulers
+    lr_scheduler_cfg = partial(
+        WarmupCosineScheduler,
+        warmup_epochs=cfg.lr_scheduler_cfg.warmup_epochs,
+        start_lr=cfg.lr_scheduler_cfg.start_lr,
+        final_lr=cfg.lr_scheduler_cfg.final_lr,
+    )
+
+    wd_scheduler_cfg = partial(
+        CosineWDSchedule,
+        ref_weight_decay=cfg.wd_scheduler_cfg.ref_weight_decay,
+        final_weight_decay=cfg.wd_scheduler_cfg.final_weight_decay,
+    )
+
+    # 5. Create online probes
+    online_probes = []
+
+    # create full model!
+    calibration_model = LightningDTDinoV2Model(
+        encoder=encoder,
+        dino_head=dino_head, 
+        optim_cfg=optim_cfg,
+        lr_scheduler_cfg=lr_scheduler_cfg,
+        wd_scheduler_cfg=wd_scheduler_cfg,
     )
 
     logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
@@ -685,6 +754,9 @@ if __name__ == '__main__':
 
     # add callbacks
     callbacks = [checkpoint_callback, lr_monitor]
+
+    import pdb; pdb.set_trace()
+
     trainer = L.Trainer(max_epochs=opt.epochs, callbacks=callbacks, logger=logger,
                         accelerator="gpu", devices=opt.gpus, strategy=strategy)
     
