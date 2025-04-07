@@ -263,7 +263,8 @@ class FullDataset(Dataset):
         else:
             # 256 by 256 mask
             self.output_mask = np.ones((512, 512))
-        
+
+        self.output_mask = self.get_output_mask()
         self.min = np.inf
         self.max = -np.inf
         
@@ -684,7 +685,6 @@ class FullDataset(Dataset):
                 x2 = ((area_shear_img[:,:,1] / 255.0) * (bounds['csforce_local']['max_val_g'] - bounds['csforce_local']['min_val_g'])) + bounds['csforce_local']['min_val_g']
                 x3 = ((area_shear_img[:,:,2] / 255.0) * (bounds['csforce_local']['max_val_b'] - bounds['csforce_local']['min_val_b'])) + bounds['csforce_local']['min_val_b']
                 area_shear = np.stack([x1, x2, x3], axis=2)
-                # area_shear = area_shear   * self.output_mask[:,:,np.newaxis]
                 data_pack.append(area_shear)
 
         if len(data_pack) > 0:
@@ -705,7 +705,11 @@ class FullDataset(Dataset):
                 y = np.concatenate([f for f in [depth, directions] if f is not None], axis=2)
             
             # apply transform
-            y = self.transform(y).float()       
+            y = self.transform(y).float()  
+            
+            resized_mask = cv2.resize(self.output_mask, (256, 256), interpolation=cv2.INTER_LINEAR)
+            y = y  * resized_mask
+
         else:
             y = [0]
 

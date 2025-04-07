@@ -254,7 +254,6 @@ class LightningDTModel(L.LightningModule):
         self.cfg = cfg
 
         self.model = build_model(cfg)
-
         
         if len(self.cfg.model.pretrained_model) > 0:
             print("Load pretrained model")
@@ -368,7 +367,6 @@ class LightningDTModel(L.LightningModule):
                 pred, z = self.model(X) 
             else:
                 pred = self.model(X)
-        
         # get the output of each encoder
         z_loss = 0
         if hasattr(self, "student_encoders"):
@@ -712,6 +710,7 @@ class LightningDTModel(L.LightningModule):
         else: 
             pred = self.model(X)
             
+
         with torch.no_grad():
             # visualize the reconstructed images
             # visualize first y and pred
@@ -1036,6 +1035,7 @@ if __name__ == '__main__':
     arg.add_argument('--encoder_paths', nargs='+', type=str, help="List of encoder paths")
     arg.add_argument('--real_world', action='store_true')
     opt = arg.parse_args()    
+
     
     # load config
     cfg = get_cfg_defaults()
@@ -1065,7 +1065,7 @@ if __name__ == '__main__':
     full_dataset_length = len(dataset)
     # go through some samples in the dataset
     X, y = dataset[100]
-    
+
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
     train_size = int(0.85 * dataset_length)
     test_size = dataset_length - train_size
