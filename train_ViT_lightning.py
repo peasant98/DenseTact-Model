@@ -208,7 +208,6 @@ class LightningDTModel(L.LightningModule):
         self.cfg = cfg
 
         self.model = build_model(cfg)
-
         
         if len(self.cfg.model.pretrained_model) > 0:
             print("Load pretrained model")
@@ -322,7 +321,6 @@ class LightningDTModel(L.LightningModule):
                 pred, z = self.model(X) 
             else:
                 pred = self.model(X)
-        
         # get the output of each encoder
         z_loss = 0
         if hasattr(self, "student_encoders"):
@@ -666,6 +664,7 @@ class LightningDTModel(L.LightningModule):
         else: 
             pred = self.model(X)
             
+
         with torch.no_grad():
             # visualize the reconstructed images
             # visualize first y and pred
@@ -992,6 +991,7 @@ if __name__ == '__main__':
     opt = arg.parse_args()    
     
 
+
     # load config
     cfg = get_cfg_defaults()
     cfg.merge_from_file(opt.config)
@@ -1064,7 +1064,7 @@ if __name__ == '__main__':
 
     # y is shape 3, 256, 256
     # save to image
-    
+
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
     train_size = int(0.85 * dataset_length)
     test_size = dataset_length - train_size
