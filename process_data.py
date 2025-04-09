@@ -235,9 +235,9 @@ class FullDataset(Dataset):
             length += (sum(os.path.isdir(os.path.join(dir, name)) for name in os.listdir(dir)) / 2)
 
         self.color_jitter = transforms.ColorJitter(
-            brightness=0.2,
-            contrast=0.2,
-            saturation=0.2,
+            brightness=0.25,
+            contrast=0.25,
+            saturation=0.25,
             hue=0.02
         )
 

@@ -125,11 +125,11 @@ if __name__ == '__main__':
     arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
     arg.add_argument('--gpus', type=int, default=4)
     
-    arg.add_argument('--model', type=str, default="mae_vit_base_patch16", help="Model Architecture, choose either hiera or vit")
+    arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=64)
     arg.add_argument('--num_workers', type=int, default=24)
     arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="DT_Ultra_vit_mae")
+    arg.add_argument('--exp_name', type=str, default="hiera_mae_sf")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     
