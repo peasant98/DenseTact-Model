@@ -1,7 +1,7 @@
 logs/
 lightning_logs/
-models/
 output/
+exp/
 real_world_data/
 real_world_output/
 test_data/
@@ -9,9 +9,25 @@ runs/
 __pycache__/
 viz/
 viz_lightning/
+wandb/
 
+output
+test_data
+
+*.ipynb
+*.out
+settings.json
 .vscode/
 sim_dataset/
 real_dataset/
 real_world_data_v2/
 data_v2/
+blend_dataset/
+
+
+real_world_data_exr/
+real_world_data_depth/
+real_world_depth/
+real_world_dataset/
+dataset_local/
+dt1_dataset/
