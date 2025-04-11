@@ -21,7 +21,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import torchvision.models as models
 import torch.nn.functional as F
 from torchvision import transforms
-from process_data import FullDataset, FEAT_CHANNEL, DatasetImg
+from process_data import FullDataset, FEAT_CHANNEL
 
 from torchmetrics.functional import structural_similarity_index_measure
 
@@ -48,6 +48,50 @@ def apply_colormap(depth_map, cmap='viridis'):
     depth_map_colored = colormap(depth_map_normalized)[:, :, :3]  # Get RGB values, ignore alpha channel
     depth_map_colored = (depth_map_colored * 255).astype(np.uint8)  # Convert to 8-bit image
     return depth_map_colored
+
+
+class LogScaleMSELoss(nn.Module):
+    """
+    Mean Squared Error loss in log space to handle very small values effectively.
+    
+    This loss transforms both predictions and targets to logarithmic space before
+    computing MSE, making it more sensitive to small values.
+    
+    Args:
+        epsilon (float): Small constant added to prevent log(0) issues. Default: 1e-6
+        reduction (str): Specifies the reduction to apply to the output:
+            'none' | 'mean' | 'sum'. Default: 'mean'
+    """
+    def __init__(self, epsilon=1e-6, reduction='mean'):
+        super(LogScaleMSELoss, self).__init__()
+        self.epsilon = epsilon
+        self.reduction = reduction
+    
+    def forward(self, pred, target):
+        """
+        Args:
+            pred (Tensor): The prediction tensor
+            target (Tensor): The target tensor
+            
+        Returns:
+            Tensor: The computed loss
+        """
+        # Apply sign-preserving log transform
+        log_pred = torch.sign(pred) * torch.log(torch.abs(pred) + self.epsilon)
+        log_target = torch.sign(target) * torch.log(torch.abs(target) + self.epsilon)
+        
+        # Compute MSE in log space
+        squared_diff = (log_pred - log_target) ** 2
+        
+        # Apply reduction
+        if self.reduction == 'none':
+            return squared_diff
+        elif self.reduction == 'sum':
+            return torch.sum(squared_diff)
+        elif self.reduction == 'mean':
+            return torch.mean(squared_diff)
+        else:
+            raise ValueError(f"Invalid reduction mode: {self.reduction}")
 
 class EdgeAwareL1Loss(nn.Module):
     def __init__(self, alpha=1.0):
@@ -162,7 +206,7 @@ class L1WithGradientLoss(nn.Module):
 # create channel-wise ssim loss
 class L1WithSSIMLoss(nn.Module):
     def __init__(self):
-        super(L1WithSSIMLoss, self).__init__()
+        super(SSIMLoss, self).__init__()
         self.ssim = structural_similarity_index_measure
         # bias to have positive values
         self.bias = 10
@@ -232,7 +276,7 @@ class LightningDTModel(L.LightningModule):
             self.criterion = L1WithGradientLoss()
         else:
             raise NotImplementedError("Loss not implemented {}".format(cfg.model.loss))
-        
+
         # get channel information
         total_output_channels = sum(self.cfg.model.out_chans)
         dataset_output_type = cfg.dataset.output_type
@@ -273,6 +317,9 @@ class LightningDTModel(L.LightningModule):
         self.smooth_l1_loss = nn.SmoothL1Loss()
         # this should be set in the config
         self.beta = 0.9
+
+    def set_teacher_encoders(self, teacher_encoders_dict):
+        self.teacher_encoders_dict = teacher_encoders_dict
         
     def set_student_encoders(self, student_encoders):
         self.student_encoders = student_encoders
@@ -316,8 +363,10 @@ class LightningDTModel(L.LightningModule):
         if self.cfg.model.encoder == "densenet":
             pred, z = self.model(X)
         else:
-            pred = self.model(X) 
-        
+            if self.cfg.model.hiera.return_encoder_output:
+                pred, z = self.model(X) 
+            else:
+                pred = self.model(X)
         # get the output of each encoder
         z_loss = 0
         if hasattr(self, "student_encoders"):
@@ -331,16 +380,20 @@ class LightningDTModel(L.LightningModule):
                 # get l1 loss between student_pred and z
                 z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
                 
-        loss = z_loss
-        # cosine similarity between the predicted and target vectors
-        # todo -- have this be between positive vectors
-        # cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
-        # # compute one scalar value for the cosine similarity
-        # cosine_similarity = torch.mean(cosine_similarity_group)
-        # cosine_loss = 1 - cosine_similarity
-        # loss += (0 * cosine_loss) 
-        # self.log('train/loss', loss , on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        if self.cfg.model.hiera.return_encoder_output:
+            # go through the teachers 
+            for key in self.teacher_encoders_dict.keys():
+                teacher_model = self.teacher_encoders_dict[key]
+                # run inference
+                student_z, output = teacher_model(X)
 
+                cosine_loss = (1 - F.cosine_similarity(student_z, z, dim=1).mean())
+                smooth_l1_loss = self.smooth_l1_loss(student_z, z)
+                
+                # get l1 loss between student_pred and z
+                z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
+        
+        loss = z_loss
         total_loss = 0. 
         predict_dict = self._process_prediction(pred)
         label_dict = self._process_prediction(Y)
@@ -353,13 +406,6 @@ class LightningDTModel(L.LightningModule):
             elif 'stress1' in name:
                 weight = self.cfg.loss.stress_weight
                 scale = self.cfg.scales.stress
-            elif 'normal' in name:
-                weight = self.cfg.loss.stress_weight
-                scale = self.cfg.scales.stress
-            elif 'shear' in name:
-                weight = self.cfg.loss.stress_weight
-                scale = self.cfg.scales.stress2
-
             elif 'stress2' in name:
                 weight = self.cfg.loss.stress2_weight
                 scale = self.cfg.scales.stress2
@@ -369,12 +415,11 @@ class LightningDTModel(L.LightningModule):
             elif 'cnorm' in name:
                 weight = self.cfg.loss.cnorm_weight
                 scale = self.cfg.scales.cnorm
-            elif 'cshear' in name:
+            elif 'shear' in name:
                 weight = self.cfg.loss.area_shear_weight
                 scale = self.cfg.scales.area_shear
             
             if name == 'depth':
-                
                 # if the label_dict is below a very small threshold, have the loss be weighted small
                 loss = 0
                 for item in label_dict[name]:
@@ -665,6 +710,7 @@ class LightningDTModel(L.LightningModule):
         else: 
             pred = self.model(X)
             
+
         with torch.no_grad():
             # visualize the reconstructed images
             # visualize first y and pred
@@ -673,11 +719,9 @@ class LightningDTModel(L.LightningModule):
                     X0 = X[i].detach().clone()
                     gt_def = X0[:3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
                     gt_undef = X0[3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
-                    gt_diff = X0[[6], :, :].detach().cpu().numpy()
                     
                     self.logger.experiment.add_image(f'{name}/gt/deform_color_{i}', gt_def, self.global_step)
                     self.logger.experiment.add_image(f'{name}/gt/undeform_color_{i}', gt_undef, self.global_step)
-                    self.logger.experiment.add_image(f'{name}/gt/diff_color_{i}', gt_diff, self.global_step)
                     
                     gt_depth = Y[i].detach().clone()
                     gt_depth = gt_depth.cpu().numpy()
@@ -709,40 +753,35 @@ class LightningDTModel(L.LightningModule):
         
         
         # unscale the prediction by each output scale
+        pred_unit_scale = pred.clone()
+        Y_unit_scale = Y.clone()
         for idx, name in enumerate(self.output_names):
             scale = 1
             if 'disp' in name:
                 scale = self.cfg.scales.disp
+                unit_scale = self.cfg.unit_scales.disp
             elif 'stress1' in name:
                 scale = self.cfg.scales.stress
+                unit_scale = self.cfg.unit_scales.stress
             elif 'stress2' in name:
                 scale = self.cfg.scales.stress2
+                unit_scale = self.cfg.unit_scales.stress2
             elif 'depth' in name:
                 scale = self.cfg.scales.depth
+                unit_scale = self.cfg.unit_scales.depth
             elif 'cnorm' in name:
                 scale = self.cfg.scales.cnorm
-            elif 'area_shear' in name:
+                unit_scale = self.cfg.unit_scales.cnorm
+            elif 'shear' in name:
                 scale = self.cfg.scales.area_shear
+                unit_scale = self.cfg.unit_scales.area_shear
             
             pred[:, idx, :, :] /= scale
-        
-        mse = self.mse(pred, Y)
-        
-        # get cosine similarity for each vector
-        # todo -- this won't work with zero vectors because they might have high difference
-        # cosine_similarity_group = self.compute_cosine_similarity_per_group(pred, Y)
-        
-        # # compute l1 loss for each vector
-        # l1_loss_group = self.compute_mean_l1_loss_per_group(pred, Y)
-        
-        # # for each item, log the cosine similarity and l1 loss
-        # for i, (cosine_sim, l1_loss) in enumerate(zip(cosine_similarity_group, l1_loss_group)):
-        #     self.log(f'{name}/cosine_sim_{i}', cosine_sim.item(), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        #     self.log(f'{name}/l1_loss_{i}', l1_loss.item(), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
             
-        #     # add to the validation stats
-        #     self.validation_stats[f"cosine_sim_{i}"].append(cosine_sim.item())
-        #     self.validation_stats[f"l1_loss_{i}"].append(l1_loss.item())
+            pred_unit_scale[:, idx, :, :] = pred[:, idx, :, :] / unit_scale
+            Y_unit_scale[:, idx, :, :] = Y[:, idx, :, :] / unit_scale
+        mse = self.mse(pred_unit_scale, Y_unit_scale)
+        
             
         # compute ssim per channel
         ssim_per_channel = []
@@ -761,7 +800,7 @@ class LightningDTModel(L.LightningModule):
         self.log(f'{name}/mse', mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         self.validation_stats["mse"].append(mse.item())
 
-        predict_dict, label_dict = self._process_prediction(pred), self._process_prediction(Y)
+        predict_dict, label_dict = self._process_prediction(pred_unit_scale), self._process_prediction(Y_unit_scale)
         
         # compute force metric
         for name in self.cfg.dataset.output_type:
@@ -984,20 +1023,19 @@ def construct_student_encoders(encoder_paths, calibration_model):
 
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
-    arg.add_argument('--gpus', type=int, default=2) # 4
+    arg.add_argument('--gpus', type=int, default=4)
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
     arg.add_argument('--logger', type=str, default="tensorboard")
-    # arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
-    arg.add_argument('--dataset_dir', type=str, default="/media/wkdo/Seagate1/won/simul/dataset/es1t/dataset")
+    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
     arg.add_argument('--match_features_from_encoders', action='store_true')
     arg.add_argument('--encoder_paths', nargs='+', type=str, help="List of encoder paths")
     arg.add_argument('--real_world', action='store_true')
-    opt = arg.parse_args()
-    
+    opt = arg.parse_args()    
+
     
     # load config
     cfg = get_cfg_defaults()
@@ -1014,45 +1052,22 @@ if __name__ == '__main__':
         transforms.ToTensor(),
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
+
+    extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
+                          '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
+                          '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
     
-    # dataset = FullDataset(cfg, transform=transform, 
-    #                       samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
-    
-    dataset = DatasetImg(cfg, transform=transform, 
+    dataset = FullDataset(cfg, transform=transform, 
+                          extra_samples_dirs=extra_samples_dirs,
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
-    
-    # go through dataset and find mean std
-    
-    
-    # get 1k random idx
-#     idx = np.random.choice(len(dataset), len(dataset), replace=False)
-#     # 
-#     channel_sums = np.zeros(3)
-#     channel_squares = np.zeros(3)
-#     num_pixels = len(idx) * 256 * 256
-# # 
-#     # Iterate through the list of items
-#     for i in tqdm(idx, desc="Processing items"):
-#         item = dataset[i][1].numpy()  # Shape (3, 256, 256)
-#         channel_sums += np.sum(item, axis=(1, 2))  # Sum over height and width (axes 1 and 2)
-#         channel_squares += np.sum(item**2, axis=(1, 2))  # Sum of squares over height and width
-# # 
-#     # Calculate channel means and standard deviations
-#     channel_means = channel_sums / num_pixels
-#     channel_stds = np.sqrt(channel_squares / num_pixels - channel_means**2)
-# # 
-#     # Output the results
-#     print("Channel Means:", channel_means)
-#     print("Channel Standard Deviations:", channel_stds)
-    
-#     exit()
-    # import pdb; pdb.set_trace()
     
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
-    
+    # go through some samples in the dataset
+    X, y = dataset[100]
+
     dataset_length = int(cfg.dataset_ratio * full_dataset_length)
-    train_size = int(0.7 * dataset_length)
+    train_size = int(0.85 * dataset_length)
     test_size = dataset_length - train_size
     cfg.total_steps = train_size * cfg.epochs // (cfg.batch_size * opt.gpus)
     
@@ -1065,6 +1080,7 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=12)
 
     calibration_model = LightningDTModel(cfg)
+
 
     # get date
     date = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -1095,7 +1111,33 @@ if __name__ == '__main__':
     trainer = L.Trainer(max_epochs=cfg.epochs, callbacks=callbacks, logger=logger,
                         accelerator="gpu", devices=opt.gpus, strategy=strategy,
                         gradient_clip_val=cfg.gradient_clip_val, gradient_clip_algorithm=cfg.gradient_clip_algorithm)
-    
+
+
+    # load the hiera encoders if desired
+    teacher_models = {}
+    if cfg.model.hiera.return_encoder_output:
+        for output in cfg.dataset.output_type:
+            # get the encoder path
+            if output == "cnorm":
+                encoder_path = cfg.teacher_encoders.cnorm_path
+            elif output == "disp":
+                encoder_path = cfg.teacher_encoders.disp_path
+            elif output == "shear":
+                encoder_path = cfg.teacher_encoders.area_shear_path
+            elif output == "stress1":
+                encoder_path = cfg.teacher_encoders.stress_path
+            elif output == "stress2":
+                encoder_path = cfg.teacher_encoders.stress2_path
+
+            # load only the encoder
+            teacher_model = build_model(cfg)
+            teacher_model.load_from_pretrained_model(encoder_path)   
+            teacher_models[output] = teacher_model
+
+        # add teacher encoders!
+        calibration_model.set_teacher_encoders(teacher_models)
+
+
     # only load states for finetuning and model is densenet
     if opt.finetune and "densenet" in cfg.model.name:
         model_state = torch.load(opt.ckpt_path)

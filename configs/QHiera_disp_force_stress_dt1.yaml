@@ -1,14 +1,25 @@
 dataset_ratio: 1.0
-batch_size: 12
+batch_size: 16
 scale: 1.0
 epochs: 100
 
 scales:
-  stress: 10000.
+  disp: 10.
+  cnorm: 1000.
+  stress: 1000.
+  stress2: 1000.
+
+unit_scales:
+  disp: 1000.
+  cnorm: 1.
+  stress: 1.
+  stress2: 1.
 
 model:
   name: HieraDPT
-  out_chans: [3]
+  out_chans: [3, 3, 3, 3]
+  pretrained_model: "DT_Ultra_1/checkpoints/last.ckpt"
+  LoRA: True
 
   hiera:
     decoder: "QUpsampling"
@@ -17,7 +28,8 @@ model:
     decoder_depth: 8
 
 dataset:
-  output_type: ["stress1"]
+  output_type: ["disp", "cnorm", "stress1", "stress2"]
+  normalization: False
 
 optimizer:
   name: AdamW

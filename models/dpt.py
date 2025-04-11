@@ -560,6 +560,7 @@ class HieraQUpsampingDecoder(nn.Module):
         x = x.permute(0, 3, 1, 2)     # (B, C, H, W)
         
         pred = []
+        # maybe output z as x here?
         for spatial_decoder in self.spatial_decoders:
             pred.append(spatial_decoder(x))
         pred = torch.cat(pred, dim=1)
@@ -631,6 +632,11 @@ class HieraDPT(nn.Module):
         if isinstance(out_dims, int):
             out_dims = [out_dims]
         norm_layer = partial(nn.LayerNorm, eps=1e-6)
+        # log the output channels for user
+        print(f"Output Channels: {out_dims}")
+
+        # return encoder output
+        self.return_encoder_outputs = cfg.model.hiera.return_encoder_output
 
         encoder_kwargs = dict(
             input_size=(cfg.model.img_size, cfg.model.img_size),
@@ -722,7 +728,11 @@ class HieraDPT(nn.Module):
             preds.append(decoder(intermediates))
 
         preds = torch.cat(preds, dim=1)
-        return preds    
+
+        if self.return_encoder_outputs:
+            return preds, intermediates
+
+        return preds     
 
     def freeze_encoder(self):
         self.encoder.eval()
@@ -742,9 +752,8 @@ class HieraDPT(nn.Module):
         for k in self.encoder.state_dict().keys():
             if 'model.' + k in model_ckpt["state_dict"]:
                 state_dict[k] = model_ckpt["state_dict"]['model.' + k]
-        
+        # load state_dict
         res = self.encoder.load_state_dict(state_dict)
-        print(res)
 
 
 if __name__ == "__main__":

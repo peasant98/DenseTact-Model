@@ -15,6 +15,14 @@ cfg.scale = 1.
 cfg.gradient_clip_val = None
 cfg.gradient_clip_algorithm = None
 
+
+cfg.teacher_encoders = CN()
+cfg.teacher_encoders.disp_path = ''
+cfg.teacher_encoders.stress_path = ''
+cfg.teacher_encoders.stress2_path = ''
+cfg.teacher_encoders.cnorm_path = ''
+cfg.teacher_encoders.area_shear_path = ''
+
 cfg.scales = CN()
 cfg.scales.disp = 1.
 cfg.scales.depth = 1.
@@ -22,6 +30,14 @@ cfg.scales.stress = 1.
 cfg.scales.stress2 = 1.
 cfg.scales.cnorm = 1.
 cfg.scales.area_shear = 1.
+
+cfg.unit_scales = CN()
+cfg.unit_scales.disp = 1.
+cfg.unit_scales.depth = 1.
+cfg.unit_scales.stress = 1.
+cfg.unit_scales.stress2 = 1.
+cfg.unit_scales.cnorm = 1.
+cfg.unit_scales.area_shear = 1.
 
 cfg.loss = CN()
 cfg.loss.stress_weight = 1.
@@ -37,7 +53,7 @@ cfg.model.name = "DPT"
 cfg.model.pretrained_model = ""
 cfg.model.img_size = 256
 cfg.model.patch_size = 16
-cfg.model.in_chans = 7
+cfg.model.in_chans = 6
 cfg.model.encoder = 'vitl'
 cfg.model.out_chans = [1]
 cfg.model.loss = "L1"
@@ -53,7 +69,7 @@ cfg.model.cnn.decoder_output_dim = [1024, 512, 256, 128, 64]
 
 # parameters for Hiera model
 cfg.model.hiera = CN()
-# this is the defaut for encoder
+# this is the default for encoder
 cfg.model.hiera.embed_dim = 96
 cfg.model.hiera.num_heads = 1
 cfg.model.hiera.stages = [2, 3, 16, 3]
@@ -72,6 +88,10 @@ cfg.model.hiera.decoder_depth_per_stage = 4
 # for Vanilla model (decoder = "Vanilla")
 cfg.model.hiera.decoder_num_heads = 1
 cfg.model.hiera.decoder_depth = 3
+
+
+# returning the encoder output in hiera
+cfg.model.hiera.return_encoder_output = False
 
 cfg.dataset = CN()
 cfg.dataset.output_type = []

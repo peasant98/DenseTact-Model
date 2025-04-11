@@ -10,7 +10,7 @@ __pycache__/
 viz/
 viz_lightning/
 wandb/
-
+hiera_mae_sf/
 output
 test_data
 

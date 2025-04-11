@@ -16,6 +16,8 @@ import timm
 from PIL import Image
 import numpy as np
 import cv2
+from scipy.ndimage import gaussian_filter
+import torchvision.transforms as transforms
 
 import pandas as pd
 
@@ -47,9 +49,7 @@ FEAT_CHANNEL = {
     "stress1": 3,
     "stress2": 3,
     "shear": 3,
-    "cnorm": 3,
-    "cshear": 3,
-    "normal": 3
+    "cnorm": 3
 }
 
 MAX = 0
@@ -60,14 +60,80 @@ sample_id = manager.Value('i', 0)
 sample_id_lock = manager.Lock()
 
 
-STRESS1_MEANS = [-0.00228839, -0.00501893, -0.00231929]
-STRESS1_STDS = [0.00511871, 0.00739775, 0.00576505]
+DISP_MEANS = [-0.17508025467395782, -0.8888664841651917, -0.12558214366436005]
+DISP_STDS = [0.5062088370323181, 1.4978240728378296, 0.44729936122894287]
+
+FORCE_MEANS = [-0.0026451176963746548, -0.010370887815952301, -0.002843874040991068]
+FORCE_STDS =  [0.0008145869709551334, 0.0002247917652130127, 0.00009318174794316292]
+
+STRESS1_MEANS =  [-0.017115609720349312, -0.02853190153837204, -0.01735331304371357]
+STRESS1_STDS = [0.03661240264773369, 0.05918154492974281, 0.03791118785738945]
+
+def augment_images(deformed_img_norm, undeformed_img_norm, 
+                  contrast_range=(0.8, 1.2), 
+                  brightness_range=(-0.1, 0.1), 
+                  hue_range=(-0.05, 0.05),
+                  saturation_range=(0.8, 1.2),
+                  blur_sigma=None):
+    """
+    Apply random augmentations to both images while keeping the same transformations.
+    
+    Args:
+        deformed_img_norm: Normalized deformed image [0-1]
+        undeformed_img_norm: Normalized undeformed image [0-1]
+        contrast_range: Range for contrast adjustment
+        brightness_range: Range for brightness adjustment
+        hue_range: Range for hue shift
+        saturation_range: Range for saturation adjustment
+        blur_sigma: If not None, apply Gaussian blur with this sigma
+    
+    Returns:
+        Augmented deformed and undeformed images
+    """
+    # Generate random values for augmentation (same for both images)
+    contrast = np.random.uniform(*contrast_range)
+    brightness = np.random.uniform(*brightness_range)
+    hue_shift = np.random.uniform(*hue_range)
+    saturation = np.random.uniform(*saturation_range)
+    
+    # Make copies to avoid modifying originals
+    deformed_aug = deformed_img_norm.copy()
+    undeformed_aug = undeformed_img_norm.copy()
+    
+    # Apply contrast and brightness adjustments in RGB
+    deformed_aug = np.clip(deformed_aug * contrast + brightness, 0, 1)
+    undeformed_aug = np.clip(undeformed_aug * contrast + brightness, 0, 1)
+    
+    # Convert to HSV for hue and saturation adjustments
+    deformed_hsv = cv2.cvtColor((deformed_aug*255).astype(np.uint8), cv2.COLOR_RGB2HSV).astype(float)
+    undeformed_hsv = cv2.cvtColor((undeformed_aug*255).astype(np.uint8), cv2.COLOR_RGB2HSV).astype(float)
+    
+    # Apply hue shift (hue in OpenCV is 0-180)
+    deformed_hsv[:,:,0] = (deformed_hsv[:,:,0] + hue_shift * 180) % 180
+    undeformed_hsv[:,:,0] = (undeformed_hsv[:,:,0] + hue_shift * 180) % 180
+    
+    # Apply saturation adjustment
+    deformed_hsv[:,:,1] = np.clip(deformed_hsv[:,:,1] * saturation, 0, 255)
+    undeformed_hsv[:,:,1] = np.clip(undeformed_hsv[:,:,1] * saturation, 0, 255)
+    
+    # Convert back to RGB
+    deformed_aug = cv2.cvtColor(deformed_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB) / 255.0
+    undeformed_aug = cv2.cvtColor(undeformed_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB) / 255.0
+    
+    # Apply Gaussian blur if specified
+    if blur_sigma is not None:
+        deformed_aug = gaussian_filter(deformed_aug, sigma=(blur_sigma, blur_sigma, 0))
+        undeformed_aug = gaussian_filter(undeformed_aug, sigma=(blur_sigma, blur_sigma, 0))
+    
+    return deformed_aug, undeformed_aug
 
 def normalize_item(item, channel_means, channel_stds):
     """
     Normalize a single item with shape (H, W, C).
     """
-    normalized_item = (item - channel_means[None, None, :]) / channel_stds[None, None, :]
+    # normalized_item = (item - channel_means[None, None, :]) / channel_stds[None, None, :]
+    normalized_item = (item - channel_means[None, None, :])
+
     return normalized_item
 
 def write_data(file_path, data, is_X = True, bounds_dict=None):
@@ -140,7 +206,8 @@ class FullDataset(Dataset):
     def __init__(self,  opt, transform=None, 
                  samples_dir='../Documents/Dataset/sim_dataset', 
                  root_dir=None,
-                 is_real_world=False):
+                 extra_samples_dirs=['../Documents/Dataset/sim_dataset'],
+                 is_real_world=False, is_mae=False):
         """
         Dataset for DenseTact Calibration task
 
@@ -157,6 +224,22 @@ class FullDataset(Dataset):
         self.transform = transform  
         self.output_type = opt.dataset.output_type
         self.normalization = opt.dataset.normalization
+        self.extra_samples_dirs = extra_samples_dirs
+        self.is_mae = is_mae
+
+        self.folder_with_idx = []
+        self.folder_with_idx.append((0, self.samples_dir))
+        length = sum(os.path.isdir(os.path.join(self.samples_dir, name)) for name in os.listdir(self.samples_dir)) / 2
+        for dir in extra_samples_dirs:
+            self.folder_with_idx.append((int(length), dir))
+            length += (sum(os.path.isdir(os.path.join(dir, name)) for name in os.listdir(dir)) / 2)
+
+        self.color_jitter = transforms.ColorJitter(
+            brightness=0.25,
+            contrast=0.25,
+            saturation=0.25,
+            hue=0.02
+        )
 
         for t in opt.dataset.output_type:
             assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, \
@@ -180,7 +263,8 @@ class FullDataset(Dataset):
         else:
             # 256 by 256 mask
             self.output_mask = np.ones((512, 512))
-        
+
+        self.output_mask = self.get_output_mask()
         self.min = np.inf
         self.max = -np.inf
         
@@ -430,8 +514,11 @@ class FullDataset(Dataset):
         
         length = sum(os.path.isdir(os.path.join(self.samples_dir, name)) for name in os.listdir(self.samples_dir)) / 2
         
+        for dir in self.extra_samples_dirs:
+            # add to the length
+            length = int(length)
+            length += (sum(os.path.isdir(os.path.join(dir, name)) for name in os.listdir(dir)) / 2)
         # augment data with rotations by 90 degrees
-        
         self.length = int(length)
         
         return int(length)
@@ -468,41 +555,64 @@ class FullDataset(Dataset):
     def __getitem__(self, idx):
         """Get item in dataset. Will get either depth or whole output suite"""
         
-        sample_num = int((idx % (self.length / 4)) + 1)
-        augmentation_num = int((idx // (self.length / 4)))
-        sample_num = idx + 1
-        
+
+        # based on sample idx, compute which folder to look in
+        for folder_item in sorted(self.folder_with_idx)[::-1]:
+            folder_start_idx = folder_item[0]
+            folder_name = folder_item[1]
+
+            if idx >= folder_start_idx:
+                # got the folder, get the sample num in the folder now
+                sample_num = idx - folder_start_idx
+                samples_dir = folder_name
+                break
+
+        sample_num = sample_num + 1
         
         # read deformed and undeformed images
-        deformed_img_norm = cv2.imread(f'{self.samples_dir}/X{sample_num}/deformed.png')
-        undeformed_img_norm = cv2.imread(f'{self.samples_dir}/X{sample_num}/undeformed.png')
+        deformed_img_norm = cv2.imread(f'{samples_dir}/X{sample_num}/deformed.png')
+        undeformed_img_norm = cv2.imread(f'{samples_dir}/X{sample_num}/undeformed.png')
         
         deformed_img_norm = cv2.cvtColor(deformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
         undeformed_img_norm = cv2.cvtColor(undeformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
-        
-        # read image diff
-        image_diff = cv2.imread(f'{self.samples_dir}/X{sample_num}/diff.png', cv2.IMREAD_ANYDEPTH)
-        # convert image diff to float
-        image_diff = image_diff.astype(np.float32)
+
+        deformed_pil = Image.fromarray((deformed_img_norm * 255).astype(np.uint8))
+        undeformed_pil = Image.fromarray((undeformed_img_norm * 255).astype(np.uint8))
+        jittered_deformed_pil = self.color_jitter(deformed_pil)
+        jittered_undeformed_pil = self.color_jitter(undeformed_pil)
+
+        # Convert back to numpy arrays with values in [0,1] range
+        deformed_img_norm = np.array(jittered_deformed_pil).astype(np.float32) / 255.0
+        undeformed_img_norm = np.array(jittered_undeformed_pil).astype(np.float32) / 255.0
+
+        hsv_img1 = cv2.cvtColor((deformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
+        hsv_img2 = cv2.cvtColor((undeformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
+
+        image_diff = cv2.subtract(hsv_img1[:,:,2], hsv_img2[:,:,2]) / 255.0
         # add extra dimension
         image_diff = image_diff[:,:,np.newaxis]
         
-        # normalize image diff
-        image_diff = image_diff / 255.0
-
         data_pack = []
-
+        
+        # return data to avoid extra file reads.
+        if self.is_mae:
+            X = (deformed_img_norm, undeformed_img_norm)
+            X = np.concatenate(X, axis=2)
+            X = self.transform(X).float()
+            y = [0]
+            return X, y
+        
         # load bounds json only if it exists
-        bounds_exists = os.path.exists(f'{self.samples_dir}/y{sample_num}/bounds.json')
+        bounds_exists = os.path.exists(f'{samples_dir}/y{sample_num}/bounds.json')
         if bounds_exists:
-            with open(f'{self.samples_dir}/y{sample_num}/bounds.json') as f:
+            with open(f'{samples_dir}/y{sample_num}/bounds.json') as f:
                 bounds = json.load(f)
 
         for t in self.output_type:
            
             if t == 'depth':
                 # process depth
-                relative_depth = cv2.imread(f'{self.samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
+                relative_depth = cv2.imread(f'{samples_dir}/y{sample_num}/depth.png', cv2.IMREAD_ANYDEPTH)
                 relative_depth = relative_depth / 10000.0
                 relative_depth = relative_depth - 1 
                 y = relative_depth
@@ -510,63 +620,71 @@ class FullDataset(Dataset):
                 data_pack.append(y)
 
             elif t == 'cnorm':
-                cnorm_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/cnorm.png')
+                cnorm_img = cv2.imread(f'{samples_dir}/y{sample_num}/cnforce_local.png')
                 cnorm_img = cv2.cvtColor(cnorm_img, cv2.COLOR_BGR2RGB)
-                x1 = ((cnorm_img[:,:,0] / 255.0) * (bounds['CNORM']['max_val_r'] - bounds['CNORM']['min_val_r'])) + bounds['CNORM']['min_val_r']
-                x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['CNORM']['max_val_g'] - bounds['CNORM']['min_val_g'])) + bounds['CNORM']['min_val_g']
-                x3 = ((cnorm_img[:,:,2] / 255.0) * (bounds['CNORM']['max_val_b'] - bounds['CNORM']['min_val_b'])) + bounds['CNORM']['min_val_b']
+                x1 = ((cnorm_img[:,:,0] / 255.0) * (bounds['cnforce_local']['max_val_r'] - bounds['cnforce_local']['min_val_r'])) + bounds['cnforce_local']['min_val_r']
+                x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['cnforce_local']['max_val_g'] - bounds['cnforce_local']['min_val_g'])) + bounds['cnforce_local']['min_val_g']
+                x3 = ((cnorm_img[:,:,2] / 255.0) * (bounds['cnforce_local']['max_val_b'] - bounds['cnforce_local']['min_val_b'])) + bounds['cnforce_local']['min_val_b']
                 cnorm = np.stack([x1, x2, x3], axis=2)
                 # apply self.mask to cnorm
-                cnorm = cnorm * self.output_mask[:,:,np.newaxis]
+                # cnorm = cnorm * self.output_mask[:,:,np.newaxis]
+                if self.normalization:
+                    cnorm = normalize_item(cnorm, np.array(FORCE_MEANS), np.array(FORCE_STDS))
+
                 data_pack.append(cnorm)
         
             elif t == 'stress1':
                 # process stress1
-                stress1_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress1.png')
+                stress1_img = cv2.imread(f'{samples_dir}/y{sample_num}/nforce_local.png')
                 stress1_img = cv2.cvtColor(stress1_img, cv2.COLOR_BGR2RGB)
-                x1 = ((stress1_img[:,:,0] / 255.0) * (bounds['S11']['max_val_r'] - bounds['S11']['min_val_r'])) + bounds['S11']['min_val_r']
-                x2 = ((stress1_img[:,:,1] / 255.0) * (bounds['S11']['max_val_g'] - bounds['S11']['min_val_g'])) + bounds['S11']['min_val_g']
-                x3 = ((stress1_img[:,:,2] / 255.0) * (bounds['S11']['max_val_b'] - bounds['S11']['min_val_b'])) + bounds['S11']['min_val_b']
+                x1 = ((stress1_img[:,:,0] / 255.0) * (bounds['nforce_local']['max_val_r'] - bounds['nforce_local']['min_val_r'])) + bounds['nforce_local']['min_val_r']
+                x2 = ((stress1_img[:,:,1] / 255.0) * (bounds['nforce_local']['max_val_g'] - bounds['nforce_local']['min_val_g'])) + bounds['nforce_local']['min_val_g']
+                x3 = ((stress1_img[:,:,2] / 255.0) * (bounds['nforce_local']['max_val_b'] - bounds['nforce_local']['min_val_b'])) + bounds['nforce_local']['min_val_b']
                 stress1 = np.stack([x1, x2, x3], axis=2)
-                stress1 = stress1 * self.output_mask[:,:,np.newaxis]
                 
                 # perform normalization if desired
-                if self.normalization:
-                    stress1 = normalize_item(stress1, np.array(STRESS1_MEANS), np.array(STRESS1_STDS))
+                # if self.normalization:
+                #     stress1 = normalize_item(stress1, np.array(DISP_MEANS), np.array(DISP_STDS))
                 
                 data_pack.append(stress1)
             
             elif t == 'stress2':
                 # process stress2
-                stress2_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/stress2.png')
+                stress2_img = cv2.imread(f'{samples_dir}/y{sample_num}/sforce_local.png')
                 stress2_img = cv2.cvtColor(stress2_img, cv2.COLOR_BGR2RGB)
-                x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['S12']['max_val_r'] - bounds['S12']['min_val_r'])) + bounds['S12']['min_val_r']
-                x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['S12']['max_val_g'] - bounds['S12']['min_val_g'])) + bounds['S12']['min_val_g']
-                x3 = ((stress2_img[:,:,2] / 255.0) * (bounds['S12']['max_val_b'] - bounds['S12']['min_val_b'])) + bounds['S12']['min_val_b']
+                x1 = ((stress2_img[:,:,0] / 255.0) * (bounds['sforce_local']['max_val_r'] - bounds['sforce_local']['min_val_r'])) + bounds['sforce_local']['min_val_r']
+                x2 = ((stress2_img[:,:,1] / 255.0) * (bounds['sforce_local']['max_val_g'] - bounds['sforce_local']['min_val_g'])) + bounds['sforce_local']['min_val_g']
+                x3 = ((stress2_img[:,:,2] / 255.0) * (bounds['sforce_local']['max_val_b'] - bounds['sforce_local']['min_val_b'])) + bounds['sforce_local']['min_val_b']
                 stress2 = np.stack([x1, x2, x3], axis=2)
-                stress2 = stress2 * self.output_mask[:, :, np.newaxis]
+                # stress2 = stress2 * self.output_mask[:, :, np.newaxis]
                 data_pack.append(stress2)
 
             elif t == 'disp':
                 # process displacement
-                displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/displacement.png')
+                # displacement_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/displacement.png')
+                displacement_img = cv2.imread(f'{samples_dir}/y{sample_num}/disp_local.png')
                 displacement_img = cv2.cvtColor(displacement_img, cv2.COLOR_BGR2RGB)
-                x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['UU1']['max_val_r'] - bounds['UU1']['min_val_r'])) + bounds['UU1']['min_val_r']
-                x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['UU1']['max_val_g'] - bounds['UU1']['min_val_g'])) + bounds['UU1']['min_val_g']
-                x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['UU1']['max_val_b'] - bounds['UU1']['min_val_b'])) + bounds['UU1']['min_val_b']
+                # x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['UU1']['max_val_r'] - bounds['UU1']['min_val_r'])) + bounds['UU1']['min_val_r']
+                # x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['UU1']['max_val_g'] - bounds['UU1']['min_val_g'])) + bounds['UU1']['min_val_g']
+                # x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['UU1']['max_val_b'] - bounds['UU1']['min_val_b'])) + bounds['UU1']['min_val_b']
+                x1 = ((displacement_img[:,:,0] / 255.0) * (bounds['disp_local']['max_val_r'] - bounds['disp_local']['min_val_r'])) + bounds['disp_local']['min_val_r']
+                x2 = ((displacement_img[:,:,1] / 255.0) * (bounds['disp_local']['max_val_g'] - bounds['disp_local']['min_val_g'])) + bounds['disp_local']['min_val_g']
+                x3 = ((displacement_img[:,:,2] / 255.0) * (bounds['disp_local']['max_val_b'] - bounds['disp_local']['min_val_b'])) + bounds['disp_local']['min_val_b']
                 displacement = np.stack([x1, x2, x3], axis=2)
-                displacement = displacement * self.output_mask[:,:,np.newaxis]
+
+                if self.normalization:
+                    displacement = normalize_item(displacement, np.array(DISP_MEANS), np.array(DISP_STDS))
+
                 data_pack.append(displacement)
 
             elif t == "shear":
                 # process area shear
-                area_shear_img = cv2.imread(f'{self.samples_dir}/y{sample_num}/area_shear.png')
+                area_shear_img = cv2.imread(f'{samples_dir}/y{sample_num}/csforce_local.png')
                 area_shear_img = cv2.cvtColor(area_shear_img, cv2.COLOR_BGR2RGB)
-                x1 = ((area_shear_img[:,:,0] / 255.0) * (bounds['CNAREA']['max_val_r'] - bounds['CNAREA']['min_val_r'])) + bounds['CNAREA']['min_val_r']
-                x2 = ((area_shear_img[:,:,1] / 255.0) * (bounds['CNAREA']['max_val_g'] - bounds['CNAREA']['min_val_g'])) + bounds['CNAREA']['min_val_g']
-                x3 = ((area_shear_img[:,:,2] / 255.0) * (bounds['CNAREA']['max_val_b'] - bounds['CNAREA']['min_val_b'])) + bounds['CNAREA']['min_val_b']
+                x1 = ((area_shear_img[:,:,0] / 255.0) * (bounds['csforce_local']['max_val_r'] - bounds['csforce_local']['min_val_r'])) + bounds['csforce_local']['min_val_r']
+                x2 = ((area_shear_img[:,:,1] / 255.0) * (bounds['csforce_local']['max_val_g'] - bounds['csforce_local']['min_val_g'])) + bounds['csforce_local']['min_val_g']
+                x3 = ((area_shear_img[:,:,2] / 255.0) * (bounds['csforce_local']['max_val_b'] - bounds['csforce_local']['min_val_b'])) + bounds['csforce_local']['min_val_b']
                 area_shear = np.stack([x1, x2, x3], axis=2)
-                area_shear = area_shear * self.output_mask[:,:,np.newaxis]
                 data_pack.append(area_shear)
 
         if len(data_pack) > 0:
@@ -587,11 +705,15 @@ class FullDataset(Dataset):
                 y = np.concatenate([f for f in [depth, directions] if f is not None], axis=2)
             
             # apply transform
-            y = self.transform(y).float()       
+            y = self.transform(y).float()  
+            
+            resized_mask = cv2.resize(self.output_mask, (256, 256), interpolation=cv2.INTER_LINEAR)
+            y = y  * resized_mask
+
         else:
             y = [0]
 
-        X = (deformed_img_norm, undeformed_img_norm, image_diff)
+        X = (deformed_img_norm, undeformed_img_norm)
         X = np.concatenate(X, axis=2)
         X = self.transform(X).float()
 
@@ -608,250 +730,6 @@ class FullDataset(Dataset):
     
     def __repr__(self) -> str:
         return f'DenseTact Dataset with {self.__len__()} samples'
-
-
-
-    OUTPUT_TYPES = ['normal', 'shear', 'disp', 'cnorm', 'cshear'] # no depth anymore? 
-    SENSORS = ['est1','sft3']
-    SENSORS = ['est1'] # only one sensor for now 
-    
-    def __init__(self, opt, transform=None, 
-                 samples_dir ='../Documents/Dataset/sim_dataset', 
-                 root_dir=None,
-                 is_real_world=False):
-        """
-        Dataset for DenseTact Calibration task wth just images
-        requires image cropping with given image center and crop size
-        1. get image center from the dataset setup (depends onsensor_name)
-        2. crop image with given center and crop size (crop size might be different? )
-        Args:
-            transform (torchvision.transforms.Compose): Transform to apply to the data
-            samples_dir (str): path to the processed dataset
-            output_type (str): Type of output to get from the dataset
-            root_dir (str) Optional: Root directory of the original dataset, 
-                    This argument is only needed when pre-processing the data
-            is_real_world (bool): Flag to indicate if it is real world data
-        """
-        self.samples_dir = samples_dir
-        self.root_dir = root_dir
-        self.transform = transform  
-        self.output_type = opt.dataset.output_type
-        self.normalization = opt.dataset.normalization
-
-        for t in opt.dataset.output_type:
-            assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, \
-                                                Input was {t}"
-        self.is_real_world = is_real_world
-        self.opt = opt
-        
-        if self.is_real_world:
-            # check if real_blender_info.json exists
-            if os.path.exists('output.json'):
-                print("output.json exists")
-            else:
-                # read from output.json
-                self.blender_info = self.read_blender_info_json('real_blender_info.json')
-        else:
-            self.blender_info = self.read_blender_info_json('blender_info.json')
-            
-        if not self.is_real_world:
-            # get output mask to only worry about DT
-            self.output_mask = self.get_output_mask()
-        else:
-            # 256 by 256 mask
-            self.output_mask = np.ones((512, 512))
-        
-        # apply same mask or decrease the size into 512 by 512? 
-        self.output_mask = np.ones((512,512))
-
-        self.min = np.inf
-        self.max = -np.inf
-        
-    def construct_dataset(self):
-        self._construct_dataset_from_json()
-            
-    def create_cache(self):
-        self.cache = []
-        for i in range(self.num_samples_to_cache):
-            res = self[i]
-            self.cache.append(res)
-            print("Cached", i)
-            # add idx to cache
-
-
-class DatasetImg(Dataset):
-    # Allowed output types for this dataset (note: these names are arbitrary
-    # and you can change them as long as you update the mapping below in __getitem__)
-    OUTPUT_TYPES = ['normal', 'shear', 'disp', 'cnorm', 'cshear']
-    # Example sensor names (not used in this minimal example)
-    SENSORS = ['est1', 'sft3']
-    SENSORS = ['est1']  # only one sensor for now 
-
-    def __init__(self, opt, transform=None, 
-                 samples_dir ='../Documents/Dataset/sim_dataset', 
-                 root_dir=None,
-                 is_real_world=False, resize512=True):
-        """
-        Dataset for DenseTact Calibration using only already–processed images.
-        It expects that for each sample n there exist two directories:
-          - {samples_dir}/X{n}  containing input images:
-              deformed.png, undeformed.png, diff.png
-          - {samples_dir}/y{n}  containing output images.
-            (The processed y folder is expected to include at least the files:
-              cnorm.png, stress1.png, stress2.png, displacement.png, area_shear.png)
-        
-        The user chooses which outputs to use by setting opt.dataset.output_type (a list
-        of output keys, chosen from OUTPUT_TYPES below). This class maps those names to
-        specific file names.
-        
-        Args:
-            opt: an options object. We expect that:
-                 opt.dataset.output_type is a list of strings
-                 opt.dataset.normalization is defined (unused here, but kept for API parity)
-            transform: a torchvision.transforms.Compose (or similar) to apply to the images.
-            samples_dir (str): Directory where the processed dataset is stored.
-            root_dir (str): Not used here.
-            is_real_world (bool): Flag (unused in this minimal example).
-        """
-        self.samples_dir = samples_dir
-        self.root_dir = root_dir
-        self.transform = transform  
-        self.output_type = opt.dataset.output_type  # e.g. ['shear', 'disp', 'cnorm']
-        self.normalization = opt.dataset.normalization
-        self.resize512 = resize512
-        # Make sure all requested outputs are allowed.
-        for t in self.output_type:
-            assert t in self.OUTPUT_TYPES, f"Output type must be one of {self.OUTPUT_TYPES}, Input was {t}"
-        self.is_real_world = is_real_world
-        self.opt = opt
-        
-        # For this class we do not need to process raw data.
-        # (We could load additional info here if desired.)
-        self.blender_info = {}
-        # Here we always use an output mask of ones (512x512)
-        self.output_mask = np.ones((1120,1120))
-        if self.resize512:
-            self.output_mask = np.ones((512,512))
-
-    def __len__(self):
-        """
-        The number of samples is taken as the number of directories in samples_dir that
-        begin with "X". (Each sample should have a corresponding X{n} and y{n} folder.)
-        """
-        sample_dirs = [
-            d for d in os.listdir(self.samples_dir)
-            if d.startswith("X") and os.path.isdir(os.path.join(self.samples_dir, d))
-        ]
-        return len(sample_dirs)
-
-    def __getitem__(self, idx):
-        """
-        Returns a tuple (X, y) where:
-         - X is the input tensor constructed from deformed.png, undeformed.png and diff.png.
-         - y is constructed by loading (and concatenating) the requested output images.
-        """
-        # Our samples are assumed to be numbered starting at 1.
-        sample_num = idx + 1
-        x_dir = os.path.join(self.samples_dir, f"X{sample_num}")
-        y_dir = os.path.join(self.samples_dir, f"y{sample_num}")
-
-        # --- Process input images ---
-        deformed_path = os.path.join(x_dir, "deformed.png")
-        undeformed_path = os.path.join(x_dir, "undeformed.png")
-        diff_path = os.path.join(x_dir, "diff.png")
-
-        deformed_img = cv2.imread(deformed_path)
-        undeformed_img = cv2.imread(undeformed_path)
-        diff_img = cv2.imread(diff_path, cv2.IMREAD_ANYDEPTH)
-
-        if self.resize512:
-            deformed_img = cv2.resize(deformed_img, (512, 512))
-            undeformed_img = cv2.resize(undeformed_img, (512, 512))
-            diff_img = cv2.resize(diff_img, (512, 512))
-
-
-        if deformed_img is None or undeformed_img is None or diff_img is None:
-            raise FileNotFoundError(f"One or more input images not found for sample {sample_num}")
-
-        # Convert deformed and undeformed images to RGB and normalize to [0,1]
-        deformed_img = cv2.cvtColor(deformed_img, cv2.COLOR_BGR2RGB) / 255.0
-        undeformed_img = cv2.cvtColor(undeformed_img, cv2.COLOR_BGR2RGB) / 255.0
-        deformed_img = deformed_img.astype(np.float32)
-        undeformed_img = undeformed_img.astype(np.float32)
-        # Process the diff image: ensure it has a channel dimension and scale it
-        diff_img = diff_img.astype(np.float32)
-        if diff_img.ndim == 2:
-            diff_img = diff_img[:, :, np.newaxis]
-        else:
-            diff_img = diff_img[:, :, 0:1]  # take one channel if more are present
-        diff_img = diff_img / 255.0
-
-        # Concatenate the three inputs along the channel axis.
-        # (deformed and undeformed are 3-channel images; diff is 1 channel → total 7 channels)
-        X = np.concatenate([deformed_img, undeformed_img, diff_img], axis=2)
-
-        if self.transform:
-            X = self.transform(X)
-
-        # --- Process output images ---
-        # Define a mapping from our allowed output types to file names in the y folder.
-        output_mapping = {
-            'normal': 'nforce.png',       # if not found, we later fall back to 'cnorm.png'
-            'shear': 'sforce.png',
-            'disp': 'disp.png',
-            'cnorm': 'cnforce.png',
-            'cshear': 'csforce.png'
-        }
-
-        y_images = []
-        for out_type in self.output_type:
-            file_name = output_mapping.get(out_type)
-            out_path = os.path.join(y_dir, file_name)
-            img = cv2.imread(out_path)
-            if self.resize512:
-                img = cv2.resize(img, (512, 512))
-            # For 'normal', if the file does not exist, try to use 'cnorm.png'
-            if out_type == 'normal' and img is None:
-                out_path = os.path.join(y_dir, 'cnforce.png')
-                img = cv2.imread(out_path)
-                if self.resize512:
-                    img = cv2.resize(img, (512, 512))
-            if img is None:
-                raise FileNotFoundError(
-                    f"Output image for type '{out_type}' not found in sample {sample_num} at path {out_path}"
-                )
-            # If the image has 3 channels, convert from BGR to RGB.
-            if len(img.shape) == 3 and img.shape[2] == 3:
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            # Normalize uint8 images to the [0,1] range.
-            if img.dtype == np.uint8:
-                img = img.astype(np.float32) / 255.0
-            else:
-                img = img.astype(np.float32)
-            y_images.append(img)
-
-        # Concatenate all requested outputs along the channel dimension.
-        y = np.concatenate(y_images, axis=2)
-
-        if self.transform:
-            y = self.transform(y)
-
-        return X, y
-
-    def __repr__(self):
-        return f"DatasetImg(samples_dir={self.samples_dir}, num_samples={len(self)})"
-
-    # Dummy methods so that any calls from __init__ (if present) do not fail.
-    def read_blender_info_json(self, json_file):
-        return {}
-
-    def get_output_mask(self):
-        if self.resize512:
-            return np.ones((512, 512))
-        else:
-            return np.ones((1120, 1120))
-
-
 
 
 def center_crop(image, crop_px):
@@ -926,27 +804,9 @@ if __name__ == '__main__':
     ])
     
     
-    # combined_mae_dataset = CombinedMAEDataset(dir1='../DenseTact-Calibration-M/real_dataset', dir2='real_world_depth', transform=transform)
+    dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
+                          root_dir=root_dir, is_real_world=is_real_world, output_type='full')
     
-    # X = combined_mae_dataset[10]
-    
-    # # plot image
-    # X = X.permute(1, 2, 0).numpy()
-    # plt.imshow(X)
-    # plt.show()
-
-
-    # plt.imshow(img)
-    # plt.show()
-    
-    # assert False
-
-
-    # dataset = FullDataset(transform=transform, samples_dir=samples_dir, 
-    #                       root_dir=root_dir, is_real_world=is_real_world, output_type='full')
-    dataset = DatasetImg(transform=transform, samples_dir=samples_dir, 
-                            root_dir=root_dir, is_real_world=is_real_world)
-
     print()
     full_max = 0
     full_min = 0
