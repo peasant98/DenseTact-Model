@@ -5,7 +5,7 @@ cfg = CN()
 
 cfg.epochs = 100
 cfg.batch_size = 16
-cfg.num_workers = 16
+cfg.num_workers = 8
 cfg.dataset_ratio = 1.
 # seed for every thing
 # include dataset split

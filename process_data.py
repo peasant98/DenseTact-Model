@@ -591,12 +591,19 @@ class FullDataset(Dataset):
         image_diff = cv2.subtract(hsv_img1[:,:,2], hsv_img2[:,:,2]) / 255.0
         # add extra dimension
         image_diff = image_diff[:,:,np.newaxis]
+
+        # we should perturb the image difference here
+        # add a bit of gaussian noise
+        noise = np.random.normal(0, 0.05, image_diff.shape)
+        image_diff = image_diff + noise
+        # Clip values to ensure they stay in valid range [0, 1]
+        image_diff = np.clip(image_diff, 0, 1)
         
         data_pack = []
         
         # return data to avoid extra file reads.
         if self.is_mae:
-            X = (deformed_img_norm, undeformed_img_norm)
+            X = (deformed_img_norm, undeformed_img_norm, image_diff)
             X = np.concatenate(X, axis=2)
             X = self.transform(X).float()
             y = [0]
