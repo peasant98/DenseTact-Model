@@ -120,7 +120,7 @@ class LightningDTModel(L.LightningModule):
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
-    arg.add_argument('--dataset_dir', type=str, default="/home/wkdo/Documents/dt_dataset/sf4t/dataset_local/")
+    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/es4t/es4t/dataset_local/")
     arg.add_argument('--epochs', type=int, default=200)
     arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
     arg.add_argument('--gpus', type=int, default=2)
@@ -146,9 +146,9 @@ if __name__ == '__main__':
     ])
     
 
-    extra_samples_dirs = ['/home/wkdo/Documents/dt_dataset/sf1t/dataset_local/', 
-                          '/home/wkdo/Documents/dt_dataset/sf2t/dataset_local/',
-                          '/home/wkdo/Documents/dt_dataset/sf3t/dataset_local/']
+    extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
+                          '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
+                          '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
     dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, 
                           extra_samples_dirs=extra_samples_dirs,
                           is_real_world=opt.real_world, is_mae=True)

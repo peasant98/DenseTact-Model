@@ -11,6 +11,7 @@ from copy import deepcopy
 import matplotlib as mpl
 import wandb
 import datetime
+from termcolor import cprint
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -24,6 +25,8 @@ from torchvision import transforms
 from process_data import FullDataset, FEAT_CHANNEL
 
 from torchmetrics.functional import structural_similarity_index_measure
+
+from torch.cuda.amp import autocast
 
 
 import lightning as L
@@ -41,6 +44,8 @@ from util.scheduler_util import LinearWarmupCosineAnnealingLR
 from models.dense import DecoderNHead
 
 from tqdm import tqdm
+
+from copy import deepcopy
 
 def apply_colormap(depth_map, cmap='viridis'):  
     depth_map_normalized = (depth_map - np.min(depth_map)) / (np.max(depth_map) - np.min(depth_map) + 0.00001)  # Normalize to [0, 1]
@@ -321,6 +326,7 @@ class LightningDTModel(L.LightningModule):
     def set_teacher_encoders(self, teacher_encoders_dict):
         self.teacher_encoders_dict = teacher_encoders_dict
         
+        
     def set_student_encoders(self, student_encoders):
         self.student_encoders = student_encoders
     
@@ -335,13 +341,17 @@ class LightningDTModel(L.LightningModule):
             for student_encoder in self.student_encoders:
                 student_encoder.eval().to(next(self.model.parameters()).device)
 
+        if hasattr(self, "teacher_encoders_dict"):
+            for enc_key in self.teacher_encoders_dict:
+                self.teacher_encoders_dict[enc_key].eval().to(next(self.model.parameters()).device)
+
     def on_train_epoch_start(self):
         """ 
         I decide to always freeze the encoder when loading from a pretrained model 
         If you want to finetune the encoder, you can load from a checkpoint and set the pretrained_model to ""
         """
         epoch = self.current_epoch
-        if len(self.cfg.model.pretrained_model) > 0 and epoch < 50:
+        if len(self.cfg.model.pretrained_model) > 0 and epoch < -1:
             print("Freezing encoder when loading from pretrained model")
             self.model.freeze_encoder()
         else:
@@ -359,7 +369,7 @@ class LightningDTModel(L.LightningModule):
         # # force Negative samples to be 0
         # Y = torch.where(torch.abs(Y) < self.cfg.metric.PN_thresh, torch.zeros_like(Y), Y)
         N, C, H, W = X.shape 
-        
+
         if self.cfg.model.encoder == "densenet":
             pred, z = self.model(X)
         else:
@@ -381,20 +391,28 @@ class LightningDTModel(L.LightningModule):
                 z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
                 
         if self.cfg.model.hiera.return_encoder_output:
-            # go through the teachers 
-            for key in self.teacher_encoders_dict.keys():
-                teacher_model = self.teacher_encoders_dict[key]
-                # run inference
-                student_z, output = teacher_model(X)
-
-                cosine_loss = (1 - F.cosine_similarity(student_z, z, dim=1).mean())
-                smooth_l1_loss = self.smooth_l1_loss(student_z, z)
+            # go through the teachers and compute similarity
+            z_loss = 0.0  # Initialize z_loss
+            with autocast():
+                for key in self.teacher_encoders_dict.keys():
+                    teacher_model = self.teacher_encoders_dict[key]
+                    # Run inference on teacher model
+                    _, teacher_z = teacher_model(X)
+                    
+                    # Compute losses
+                    cosine_loss = (1 - F.cosine_similarity(teacher_z, z, dim=-1).mean())
+                    smooth_l1_loss = self.smooth_l1_loss(teacher_z, z)
+                    
+                    # Accumulate loss
+                    z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
+                    
+                # Log the total z_loss
+                self.log(f'train/z_loss', z_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
                 
-                # get l1 loss between student_pred and z
-                z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
         
+        z_loss *= 100
         loss = z_loss
-        total_loss = 0. 
+        total_loss = z_loss
         predict_dict = self._process_prediction(pred)
         label_dict = self._process_prediction(Y)
 
@@ -703,13 +721,15 @@ class LightningDTModel(L.LightningModule):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
         X, Y = batch 
         N, C, H, W = X.shape 
-        
+
         # if model is densenet, get the z value
         if self.cfg.model.encoder == "densenet":
             pred, z = self.model(X)
         else: 
-            pred = self.model(X)
-            
+            if self.cfg.model.hiera.return_encoder_output:
+                pred, z = self.model(X) 
+            else:
+                pred = self.model(X)
 
         with torch.no_grad():
             # visualize the reconstructed images
@@ -1053,6 +1073,11 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
 
+
+    # extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/sf2t/dataset_local/', 
+                        #   '/arm/u/maestro/Desktop/DenseTact-Model/sf3t/dataset_local/',
+                        #   '/arm/u/maestro/Desktop/DenseTact-Model/sf4t/dataset_local/']
+
     extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
                           '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
                           '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
@@ -1061,6 +1086,7 @@ if __name__ == '__main__':
                           extra_samples_dirs=extra_samples_dirs,
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     
+
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
     # go through some samples in the dataset
@@ -1115,8 +1141,9 @@ if __name__ == '__main__':
 
     # load the hiera encoders if desired
     teacher_models = {}
+
     if cfg.model.hiera.return_encoder_output:
-        for output in cfg.dataset.output_type:
+        for output in tqdm(cfg.dataset.output_type, desc="Loading teacher models", unit="item"):
             # get the encoder path
             if output == "cnorm":
                 encoder_path = cfg.teacher_encoders.cnorm_path
@@ -1129,9 +1156,24 @@ if __name__ == '__main__':
             elif output == "stress2":
                 encoder_path = cfg.teacher_encoders.stress2_path
 
+            if len(encoder_path) == 0:
+                # no need to supervise on this model
+                continue
+
+            # create copy of the cfg
+            cfg_teacher = deepcopy(cfg)
+            cfg_teacher.model.out_chans = [3]
+
             # load only the encoder
-            teacher_model = build_model(cfg)
+            cprint(f"Loading {output} model", "green")
+            teacher_model = build_model(cfg_teacher)
+            if cfg.model.LoRA:
+                teacher_model.replace_LoRA(cfg.model.LoRA_rank, cfg.model.LoRA_scale)
+
             teacher_model.load_from_pretrained_model(encoder_path)   
+
+            # we can delete the decoder head
+            teacher_model.decoder_head = None
             teacher_models[output] = teacher_model
 
         # add teacher encoders!
@@ -1157,9 +1199,10 @@ if __name__ == '__main__':
         opt.ckpt_path = None
     
     if opt.match_features_from_encoders:
+        # TODO: update this for densetact
         student_encoders = construct_student_encoders(opt.encoder_paths, calibration_model)
         calibration_model.set_student_encoders(student_encoders)
-    
+
     if opt.eval:
         trainer.test(model=calibration_model, dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)
     else:

@@ -659,58 +659,14 @@ class HieraDPT(nn.Module):
         encoder_channels = self.encoder.get_out_dim(True)
         encoder_channels = encoder_channels[:self.encoder.q_pool] + encoder_channels[-1:]
 
-        if cfg.model.hiera.decoder == "DPT":
-            self.decoder_head = nn.ModuleList([
-                HieraDPTHead(cfg.model.hiera.decoder_embed_dim, 
-                                        encoder_channels, out_channels=cfg.model.hiera.decoder_mapping_channels, 
-                                        output_dim=out_dim, use_bn=cfg.model.hiera.use_bn, activation=cfg.model.hiera.activation)
-                for out_dim in out_dims
-            ])
-       
-        elif cfg.model.hiera.decoder == "Vanilla":
-
-            decoder_kwargs = dict(
-                decoder_embed_dim=cfg.model.hiera.decoder_embed_dim, 
-                decoder_num_heads=cfg.model.hiera.decoder_num_heads, 
-                q_pool=cfg.model.hiera.q_pool,
-                mlp_ratio=cfg.model.hiera.mlp_ratio,
-                mask_unit_size=self.encoder.mask_unit_size,
-                patch_stride = self.encoder.patch_stride,
-                q_stride = self.encoder.q_stride,
-                stage_ends = self.encoder.stage_ends,
-                tokens_spatial_shape = self.encoder.tokens_spatial_shape,
-                decoder_depth=cfg.model.hiera.decoder_depth)
-            
-            self.decoder_head = nn.ModuleList([
-                VanillaHieraFusionDecoder(encoder_channels, output_dim=out_dim, norm_layer=norm_layer, **decoder_kwargs)
-                for out_dim in out_dims
-            ])
-        
-        elif cfg.model.hiera.decoder == "QUpsampling":
-
-            decoder_kwargs = dict(
-                # decoder_embed_dim = cfg.model.hiera.decoder_embed_dim, 
-                decoder_num_heads=cfg.model.hiera.decoder_num_heads, 
-                mlp_ratio=cfg.model.hiera.mlp_ratio,
-                q_stride = self.encoder.q_stride,
-                decoder_depth_per_stage = cfg.model.hiera.decoder_depth_per_stage,
-                tokens_spatial_shape = self.encoder.tokens_spatial_shape)
-            
-            self.decoder_head = nn.ModuleList([
-                HieraQUpsampingDecoder(encoder_channels, output_dims=out_dims, norm_layer=norm_layer, **decoder_kwargs)
-                # for out_dim in out_dims
-            ])
-        
     def configure_optimizers(self, cfg):
         if cfg.optimizer.name == "Adam":
             optimizer = torch.optim.Adam([
-                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10},
-                {'params': [p for p in self.decoder_head.parameters() if p.requires_grad], 'lr': cfg.optimizer.lr}
+                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10}
             ])
         elif cfg.optimizer.name == "AdamW":
             optimizer = torch.optim.AdamW([
-                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10},
-                {'params': [p for p in self.decoder_head.parameters() if p.requires_grad], 'lr': cfg.optimizer.lr}
+                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10}
             ])
 
         return optimizer
@@ -719,19 +675,16 @@ class HieraDPT(nn.Module):
         replace_LoRA(self.encoder, MonkeyPatchLoRALinear, rank=rank, lora_scale=scale)
 
     def forward(self, x):
-        z, intermediates = self.encoder(x, None, return_intermediates=True)
+        _, intermediates = self.encoder(x, None, return_intermediates=True)
         intermediates = intermediates[: self.encoder.q_pool] + intermediates[-1:]
+
         # predictions
         preds = []
-        if self.decoder_head is None:
-            return None, z
         for decoder in self.decoder_head:
             preds.append(decoder(intermediates))
 
         preds = torch.cat(preds, dim=1)
 
-        if self.return_encoder_outputs:
-            return preds, z
 
         return preds     
 
@@ -754,14 +707,6 @@ class HieraDPT(nn.Module):
             if 'model.' + k in model_ckpt["state_dict"]:
                 state_dict[k] = model_ckpt["state_dict"]['model.' + k]
         # load state_dict
-
-        # if state dict is empty take from model. encoder
-        if len(state_dict.keys()) == 0:
-            # load model encoder
-            for k in self.encoder.state_dict().keys():
-                if 'model.encoder.' + k in model_ckpt["state_dict"]:
-                    state_dict[k] = model_ckpt["state_dict"]['model.encoder.' + k]
-
         res = self.encoder.load_state_dict(state_dict)
 
 
