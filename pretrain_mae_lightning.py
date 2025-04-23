@@ -39,9 +39,9 @@ class LightningDTModel(L.LightningModule):
         
         if model_name in pretrain_dict:
             if 'vit' in model_name:
-                self.model = pretrain_dict[model_name](img_size=256, in_chans=6)
+                self.model = pretrain_dict[model_name](img_size=256, in_chans=7)
             else:
-                self.model = pretrain_dict[model_name](input_size=256, in_chans=6)
+                self.model = pretrain_dict[model_name](input_size=256, in_chans=7)
         else:
             print("Model {} not found in pretrain_dict".format(model_name))
             print("Available models: {}".format(pretrain_dict.keys()))
@@ -123,13 +123,13 @@ if __name__ == '__main__':
     arg.add_argument('--dataset_dir', type=str, default="/home/arm-beast/Downloads/es4t/dataset_local/")
     arg.add_argument('--epochs', type=int, default=200)
     arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
-    arg.add_argument('--gpus', type=int, default=4)
+    arg.add_argument('--gpus', type=int, default=2)
     
-    arg.add_argument('--model', type=str, default="mae_vit_base_patch16", help="Model Architecture, choose either hiera or vit")
-    arg.add_argument('--batch_size', type=int, default=64)
-    arg.add_argument('--num_workers', type=int, default=24)
-    arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="DT_Ultra_vit_mae")
+    arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
+    arg.add_argument('--batch_size', type=int, default=80)
+    arg.add_argument('--num_workers', type=int, default=16)
+    arg.add_argument('--mask_ratio', type=float, default=0.7)
+    arg.add_argument('--exp_name', type=str, default="DT_Ultra_hiera_image_diff_mae")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     
@@ -144,7 +144,7 @@ if __name__ == '__main__':
         transforms.ToTensor(),
         transforms.Resize((256, 256), antialias=True),
     ])
-    
+
 
     extra_samples_dirs = ['/home/arm-beast/Downloads/es1t/dataset_local/', 
                           '/home/arm-beast/Downloads/es2t/dataset_local/',

@@ -557,7 +557,7 @@ class FullDataset(Dataset):
         
         # return data to avoid extra file reads.
         if self.is_mae:
-            X = (deformed_img_norm, undeformed_img_norm)
+            X = (deformed_img_norm, undeformed_img_norm, image_diff)
             X = np.concatenate(X, axis=2)
             X = self.transform(X).float()
             y = [0]

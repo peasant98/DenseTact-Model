@@ -21,7 +21,6 @@ from models.dpt import DPTHead
 from util.pos_embed import get_2d_sincos_pos_embed
 
 
-
 class DTViTDPT(nn.Module):
     """ Masked Autoencoder with VisionTransformer backbone and DPT (2021) head 
     """
