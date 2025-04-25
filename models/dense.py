@@ -174,7 +174,7 @@ class ResizeConv(nn.Module):
 class FullDecoder(nn.Module):
     def __init__(self, encoder_num_features, decoder_features,
                         decoder_mid_dim, decoder_output_dim,
-                        output_channels=1, decoder_N_head_info={'heads': 2, 'channels_per_head': 3}):
+                        output_channels=1, decoder_N_head_info={'heads': 5, 'channels_per_head': 3}):
         """
         Full Decoder of DenseNet
         encoder_num_features List[int]: number of features from the encoder, from deep to shallow 
@@ -370,10 +370,18 @@ class DTNet(nn.Module):
             self.decoders.append(FullDecoder(encoder_features, self.decoder_features, 
                                             cfg.model.cnn.decoder_mid_dim, cfg.model.cnn.decoder_output_dim,
                                             output_channels=head_output_channels))
-        
+    
+    def unfreeze_encoder(self):
+        """
+        Unfreeze the encoder weights
+        """
+        for param in self.encoder.parameters():
+            param.requires_grad = True
+            
     def forward(self, x):
         # Densenet Encoder
         x1, x2, x3, x4, x5 = self.encoder(x)
+
         
         # for student teacher training, we will supervise the encoder output z
         z = x5
@@ -387,7 +395,7 @@ class DTNet(nn.Module):
         outputs = []
         for decoder in self.decoders:
             outputs.append(decoder(x5, [x4, x3, x2, x1, None]))
-            
+        
         # combine the outputs into:
         # (B, head_output_channels x n_heads output, H, W)
         outputs = torch.cat(outputs, dim=1)

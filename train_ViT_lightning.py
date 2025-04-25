@@ -31,7 +31,6 @@ from torch.cuda.amp import autocast
 
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
-
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 
@@ -44,7 +43,6 @@ from util.scheduler_util import LinearWarmupCosineAnnealingLR
 from models.dense import DecoderNHead
 
 from tqdm import tqdm
-
 from copy import deepcopy
 
 def apply_colormap(depth_map, cmap='viridis'):  
@@ -53,202 +51,6 @@ def apply_colormap(depth_map, cmap='viridis'):
     depth_map_colored = colormap(depth_map_normalized)[:, :, :3]  # Get RGB values, ignore alpha channel
     depth_map_colored = (depth_map_colored * 255).astype(np.uint8)  # Convert to 8-bit image
     return depth_map_colored
-
-
-class LogScaleMSELoss(nn.Module):
-    """
-    Mean Squared Error loss in log space to handle very small values effectively.
-    
-    This loss transforms both predictions and targets to logarithmic space before
-    computing MSE, making it more sensitive to small values.
-    
-    Args:
-        epsilon (float): Small constant added to prevent log(0) issues. Default: 1e-6
-        reduction (str): Specifies the reduction to apply to the output:
-            'none' | 'mean' | 'sum'. Default: 'mean'
-    """
-    def __init__(self, epsilon=1e-6, reduction='mean'):
-        super(LogScaleMSELoss, self).__init__()
-        self.epsilon = epsilon
-        self.reduction = reduction
-    
-    def forward(self, pred, target):
-        """
-        Args:
-            pred (Tensor): The prediction tensor
-            target (Tensor): The target tensor
-            
-        Returns:
-            Tensor: The computed loss
-        """
-        # Apply sign-preserving log transform
-        log_pred = torch.sign(pred) * torch.log(torch.abs(pred) + self.epsilon)
-        log_target = torch.sign(target) * torch.log(torch.abs(target) + self.epsilon)
-        
-        # Compute MSE in log space
-        squared_diff = (log_pred - log_target) ** 2
-        
-        # Apply reduction
-        if self.reduction == 'none':
-            return squared_diff
-        elif self.reduction == 'sum':
-            return torch.sum(squared_diff)
-        elif self.reduction == 'mean':
-            return torch.mean(squared_diff)
-        else:
-            raise ValueError(f"Invalid reduction mode: {self.reduction}")
-
-class EdgeAwareL1Loss(nn.Module):
-    def __init__(self, alpha=1.0):
-        super(EdgeAwareL1Loss, self).__init__()
-        self.alpha = alpha  # This controls the influence of the edge map
-
-        # Define Sobel filters for edge detection
-        self.sobel_kernel_x = torch.tensor([[-1, 0, 1],
-                                            [-2, 0, 2],
-                                            [-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-        
-        self.sobel_kernel_y = torch.tensor([[-1, -2, -1],
-                                            [0, 0, 0],
-                                            [1, 2, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-
-    def forward(self, pred, target):
-        """
-        Compute the Edge-aware L1 loss between two images: `pred` and `target`.
-        
-        Arguments:
-        pred -- Predicted image (tensor of shape: N x C x H x W)
-        target -- Target ground truth image (tensor of shape: N x C x H x W)
-        
-        Returns:
-        loss -- The Edge-aware L1 loss between the predicted and target images.
-        """
-        # Step 1: Compute the standard L1 loss
-        l1_loss = torch.abs(pred - target)
-
-        # Step 2: Compute gradients (edges) of the predicted image using Sobel filters
-        edge_x = F.conv2d(pred, self.sobel_kernel_x, padding=1, stride=1)
-        edge_y = F.conv2d(pred, self.sobel_kernel_y, padding=1, stride=1)
-
-        # Step 3: Compute the gradient magnitude (edge strength)
-        edge_magnitude = torch.sqrt(edge_x ** 2 + edge_y ** 2)
-
-        # Step 4: Normalize edge magnitude to [0, 1] range
-        edge_magnitude = edge_magnitude / (edge_magnitude.max() + 1e-6)
-
-        # Step 5: Weight the L1 loss with the edge map
-        edge_aware_loss = l1_loss * (1 + self.alpha * edge_magnitude)
-
-        # Step 6: Return the mean loss across the batch and spatial dimensions
-        return edge_aware_loss.mean()
-    
-def compute_gradient(image):
-    """Compute gradients in x and y directions for a given image."""
-    grad_x = image[:, :, :, 1:] - image[:, :, :, :-1]
-    grad_y = image[:, :, 1:, :] - image[:, :, :-1, :]
-    return grad_x, grad_y
-
-def combined_loss(d_hat, d_star, weight_gradient=0.5, weight_l1=0.5):
-    """
-    Compute the combined loss: weighted sum of gradient matching loss and L1 loss.
-    
-    Parameters:
-        d_hat (torch.Tensor): Predicted disparity map, shape (B, H, W).
-        d_star (torch.Tensor): Ground truth disparity map, shape (B, H, W).
-        weight_gradient (float): Weight for the gradient matching loss.
-        weight_l1 (float): Weight for the L1 loss.
-    
-    Returns:
-        torch.Tensor: Combined loss.
-    """
-    # Compute residual map
-    residual = d_hat - d_star
-
-    # Compute gradients
-    grad_x, grad_y = compute_gradient(residual)
-    
-    # Gradient matching loss
-    gradient_loss = (grad_x.abs().mean() + grad_y.abs().mean())
-    
-    # L1 loss
-    l1_loss = torch.abs(residual).mean()
-    
-    # Combined loss
-    total_loss = weight_gradient * gradient_loss + weight_l1 * l1_loss
-    return total_loss
-
-
-class L1WithGradientLoss(nn.Module):
-    def __init__(self, weight_gradient=0.2, weight_l1=0.8):
-        super(L1WithGradientLoss, self).__init__()
-        self.weight_gradient = weight_gradient
-        self.weight_l1 = weight_l1
-    
-    def forward(self, pred, target):
-        """
-        Compute the combined loss: weighted sum of gradient matching loss and L1 loss.
-        
-        Arguments:
-        pred -- Predicted disparity map (tensor of shape: N x H x W)
-        target -- Target ground truth disparity map (tensor of shape: N x H x W)
-        
-        Returns:
-        loss -- The combined loss between the predicted and target disparity maps.
-        """
-        # Step 1: Compute the combined loss
-        loss = 0
-        for i in range(pred.shape[1]):
-            pred_channel = pred[:, i, :, :]
-            target_channel = target[:, i, :, :]
-            pred_channel = pred_channel.unsqueeze(1)
-            target_channel = target_channel.unsqueeze(1)
-            loss += combined_loss(pred_channel, target_channel, self.weight_gradient, self.weight_l1)
-        
-        # Step 2: Return the loss
-        return loss
-    
-    
-# create channel-wise ssim loss
-class L1WithSSIMLoss(nn.Module):
-    def __init__(self):
-        super(SSIMLoss, self).__init__()
-        self.ssim = structural_similarity_index_measure
-        # bias to have positive values
-        self.bias = 10
-        self.alpha = 0.2
-        
-    def forward(self, pred, target):
-        """
-        Compute the SSIM loss between two images: `pred` and `target`.
-        
-        Arguments:
-        pred -- Predicted image (tensor of shape: N x C x H x W)
-        target -- Target ground truth image (tensor of shape: N x C x H x W)
-        
-        Returns:
-        loss -- The SSIM loss between the predicted and target images.
-        """
-        ssim_loss = 0
-        l1_loss = torch.abs(pred - target)
-        l1_loss = l1_loss.mean()  # Mean L1 loss across the batch and spatial dimensions
-        # go trhough each channel
-        for i in range(pred.shape[1]):
-            pred_channel = pred[:, i, :, :]
-            target_channel = target[:, i, :, :]
-            
-            # get max of either pred or target
-            max_val = torch.max(pred_channel.max(), target_channel.max())
-            min_val = torch.min(pred_channel.min(), target_channel.min())
-            # min-max normalization
-            pred_channel = (pred_channel - min_val) / (max_val - min_val + 1e-6)
-            target_channel = (target_channel - min_val) / (max_val - min_val + 1e-6)
-            pred_channel = pred_channel.unsqueeze(1)
-            target_channel = target_channel.unsqueeze(1)
-            ssim_loss += (1 - self.ssim(pred_channel, target_channel))
-        # Step 1: Compute the SSIM loss
-        
-        # Step 2: Return the mean loss across the batch and spatial dimensions
-        return self.alpha * ssim_loss.mean() + l1_loss
 
 class LightningDTModel(L.LightningModule):
     OUTPUT_ORDER = ["depth", "stress_x", "stress_y", "stress_z"]
@@ -275,10 +77,6 @@ class LightningDTModel(L.LightningModule):
             self.criterion = nn.L1Loss()
         elif cfg.model.loss == "L2":
             self.criterion = nn.MSELoss()
-        elif cfg.model.loss == "l1+ssim":
-            self.criterion = L1WithSSIMLoss()
-        elif cfg.model.loss == "l1+gradient":
-            self.criterion = L1WithGradientLoss()
         else:
             raise NotImplementedError("Loss not implemented {}".format(cfg.model.loss))
 
@@ -321,7 +119,7 @@ class LightningDTModel(L.LightningModule):
         self.validation_stats = {}
         self.smooth_l1_loss = nn.SmoothL1Loss()
         # this should be set in the config
-        self.beta = 0.9
+        self.beta = 1
 
     def set_teacher_encoders(self, teacher_encoders_dict):
         self.teacher_encoders_dict = teacher_encoders_dict
@@ -364,8 +162,6 @@ class LightningDTModel(L.LightningModule):
     def training_step(self, batch, batch_idx):
         X, Y = batch 
         
-        # get epoch
-        
         # # force Negative samples to be 0
         # Y = torch.where(torch.abs(Y) < self.cfg.metric.PN_thresh, torch.zeros_like(Y), Y)
         N, C, H, W = X.shape 
@@ -377,6 +173,7 @@ class LightningDTModel(L.LightningModule):
                 pred, z = self.model(X) 
             else:
                 pred = self.model(X)
+
         # get the output of each encoder
         z_loss = 0
         if hasattr(self, "student_encoders"):
@@ -406,11 +203,11 @@ class LightningDTModel(L.LightningModule):
                     # Accumulate loss
                     z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
                     
-                # Log the total z_loss
-                self.log(f'train/z_loss', z_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
-                
         
-        z_loss *= 100
+        z_loss *= 10
+
+        # log the total z loss
+        self.log(f'train/z_loss', z_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         loss = z_loss
         total_loss = z_loss
         predict_dict = self._process_prediction(pred)
@@ -771,7 +568,6 @@ class LightningDTModel(L.LightningModule):
                     fig.savefig(osp.join(self.logger.save_dir, f"{name}_prediction_{batch_idx}_{i}.png"))
                 plt.close(fig)
         
-        
         # unscale the prediction by each output scale
         pred_unit_scale = pred.clone()
         Y_unit_scale = Y.clone()
@@ -1106,7 +902,6 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=12)
 
     calibration_model = LightningDTModel(cfg)
-
 
     # get date
     date = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
