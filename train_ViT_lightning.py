@@ -166,7 +166,7 @@ class LightningDTModel(L.LightningModule):
         # Y = torch.where(torch.abs(Y) < self.cfg.metric.PN_thresh, torch.zeros_like(Y), Y)
         N, C, H, W = X.shape 
 
-        if self.cfg.model.encoder == "densenet":
+        if self.cfg.model.encoder == "densenet" or self.cfg.model.encoder == "resnet":
             pred, z = self.model(X)
         else:
             if self.cfg.model.hiera.return_encoder_output:
@@ -520,7 +520,7 @@ class LightningDTModel(L.LightningModule):
         N, C, H, W = X.shape 
 
         # if model is densenet, get the z value
-        if self.cfg.model.encoder == "densenet":
+        if self.cfg.model.encoder == "densenet" or self.cfg.model.encoder == "resnet":
             pred, z = self.model(X)
         else: 
             if self.cfg.model.hiera.return_encoder_output:
