@@ -53,9 +53,6 @@ class DTDenseNet(nn.Module):
         Load weights from a pre-trained model
         """
         # print in red color
-        print("\033[91m" + " [WARN] Pre-trained model not available for DenseNet. Skipping loading weights." + "\033[0m")
-
-        pass
 
     def freeze_encoder(self):
         """
@@ -382,7 +379,6 @@ class DTNet(nn.Module):
         # Densenet Encoder
         x1, x2, x3, x4, x5 = self.encoder(x)
 
-        
         # for student teacher training, we will supervise the encoder output z
         z = x5
         
@@ -402,15 +398,26 @@ class DTNet(nn.Module):
         
         return outputs, z
     
-    # def load_from_pretrained_model(self, model_path:str):
-    #     model_state = torch.load(model_path)
-    #     encoder_state_dict = {k: v for k, v in model_state["state_dict"].items() if k.startswith("model.encoder.")}
-        
-    #     calibration_model_state_dict = calibration_model.state_dict()
-    #     calibration_model_state_dict.update(encoder_state_dict)
-    #     calibration_model.load_state_dict(calibration_model_state_dict)
+    def load_from_pretrained_model(self, model_path:str):
+        model_state = torch.load(model_path)
 
-    
+        state_dict = {}
+        for k in self.encoder.state_dict().keys():
+            if 'model.encoder.' + k in model_state["state_dict"]:
+                state_dict[k] = model_state["state_dict"]['model.encoder.' + k]
+
+        # calibration_model_state_dict = self.encoder.state_dict()
+        # calibration_model_state_dict.update(encoder_state_dict)
+        self.encoder.load_state_dict(state_dict)
+
+        decoder_state_dict = {}
+        for k in self.decoders.state_dict().keys():
+            if 'model.decoders.' + k in model_state["state_dict"]:
+                decoder_state_dict[k] = model_state["state_dict"]['model.decoders.' + k]
+
+        self.decoders.load_state_dict(decoder_state_dict)
+
+        print(f"Loaded model from {model_path}")
     
 if __name__ == "__main__":
     # Instantiate the model
