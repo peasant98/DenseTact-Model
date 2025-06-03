@@ -752,13 +752,15 @@ class HieraDPT(nn.Module):
             return None, z
         
         for decoder in self.decoder_head:
-            pred, trunk_z = decoder(intermediates)
+            # pred, trunk_z = decoder(intermediates)
+            pred = decoder(intermediates)
+
             preds.append(pred)
 
         preds = torch.cat(preds, dim=1)
 
         if self.return_encoder_outputs:
-            return preds, trunk_z
+            return preds, None
 
         return preds     
 

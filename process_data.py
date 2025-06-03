@@ -554,7 +554,6 @@ class FullDataset(Dataset):
         
     def __getitem__(self, idx):
         """Get item in dataset. Will get either depth or whole output suite"""
-        
 
         # based on sample idx, compute which folder to look in
         for folder_item in sorted(self.folder_with_idx)[::-1]:
@@ -598,13 +597,15 @@ class FullDataset(Dataset):
         image_diff = image_diff + noise
         # Clip values to ensure they stay in valid range [0, 1]
         image_diff = np.clip(image_diff, 0, 1)
-        
+
         data_pack = []
         
         # return data to avoid extra file reads.
         if self.is_mae:
-            X = (deformed_img_norm, undeformed_img_norm, image_diff)
+            X = (deformed_img_norm, undeformed_img_norm)
             X = np.concatenate(X, axis=2)
+
+            X = deformed_img_norm
             X = self.transform(X).float()
             y = [0]
             return X, y

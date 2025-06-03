@@ -61,17 +61,21 @@ class LightningDTModel(L.LightningModule):
         self.cfg = cfg
 
         self.model = build_model(cfg)
-        
+
+        # if cfg.model.LoRA:
+        #     self.model.replace_LoRA(cfg.model.LoRA_rank, cfg.model.LoRA_scale)
         if len(self.cfg.model.pretrained_model) > 0:
             print("Load pretrained model")
+            # self.model.load_from_pretrained_model(self.cfg.model.pretrained_model, load_decoder=True) 
             self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)   
+
+            if cfg.model.name != "DenseNetV2":
+                # todo: see if we need to freeze encoder
+                self.model.freeze_encoder()
             
-            # todo: see if we need to freeze encoder
-            self.model.freeze_encoder()
-        
-            # use LoRA finetune
-            if cfg.model.LoRA:
-                self.model.replace_LoRA(self.cfg.model.LoRA_rank, self.cfg.model.LoRA_scale)
+                # use LoRA finetune
+                if cfg.model.LoRA:
+                    self.model.replace_LoRA(self.cfg.model.LoRA_rank, self.cfg.model.LoRA_scale)
         
         if cfg.model.loss == "L1":
             self.criterion = nn.L1Loss()
@@ -121,6 +125,9 @@ class LightningDTModel(L.LightningModule):
         # this should be set in the config
         self.beta = 1
 
+        self.z_curr_mean = None
+        self.z_curr_std = None
+
     def set_teacher_encoders(self, teacher_encoders_dict):
         self.teacher_encoders_dict = teacher_encoders_dict
         
@@ -149,7 +156,7 @@ class LightningDTModel(L.LightningModule):
         If you want to finetune the encoder, you can load from a checkpoint and set the pretrained_model to ""
         """
         epoch = self.current_epoch
-        if len(self.cfg.model.pretrained_model) > 0 and epoch < -1:
+        if len(self.cfg.model.pretrained_model) > 0 and False:
             print("Freezing encoder when loading from pretrained model")
             self.model.freeze_encoder()
         else:
@@ -158,6 +165,12 @@ class LightningDTModel(L.LightningModule):
             self.model.unfreeze_encoder()
             # else:
             # self.model.unfreeze_encoder()
+
+        # Calculate trainable parameters
+        # trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        # total_params = sum(p.numel() for p in self.model.parameters())
+        # print(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({100 * trainable_params / total_params:.2f}%)")
+        
             
     def training_step(self, batch, batch_idx):
         X, Y = batch 
@@ -190,12 +203,23 @@ class LightningDTModel(L.LightningModule):
         if self.cfg.model.hiera.return_encoder_output:
             # go through the teachers and compute similarity
             z_loss = 0.0  # Initialize z_loss
+
+            # Theia loss of cosine similarity and L1 loss
+            # Make sure features are normalized!
             with autocast():
                 for key in self.teacher_encoders_dict.keys():
                     teacher_model = self.teacher_encoders_dict[key]
                     # Run inference on teacher model
                     _, teacher_z = teacher_model(X)
-                    
+
+                    # shape is torch.Size([8, 96, 64, 64])
+                    # t_mean = teacher_z.mean(dim=[0, 2, 3], keepdim=True)  # Shape: [1, 96, 1, 1]
+                    # t_std = teacher_z.std(dim=[0, 2, 3], keepdim=True)    # Shape: [1, 96, 1, 1]
+                    # norm_teacher_z = (teacher_z - t_mean) / (t_std + 1e-5)
+
+                    # # remove gradients from normal_teacher_z
+                    # norm_teacher_z = norm_teacher_z.detach()
+                             
                     # Compute losses
                     cosine_loss = (1 - F.cosine_similarity(teacher_z, z, dim=-1).mean())
                     smooth_l1_loss = self.smooth_l1_loss(teacher_z, z)
@@ -536,37 +560,37 @@ class LightningDTModel(L.LightningModule):
                     X0 = X[i].detach().clone()
                     gt_def = X0[:3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
                     gt_undef = X0[3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
-                    
                     self.logger.experiment.add_image(f'{name}/gt/deform_color_{i}', gt_def, self.global_step)
                     self.logger.experiment.add_image(f'{name}/gt/undeform_color_{i}', gt_undef, self.global_step)
-                    
                     gt_depth = Y[i].detach().clone()
                     gt_depth = gt_depth.cpu().numpy()
-                    
                     pred_depth = pred[i].detach().clone()
                     pred_depth = pred_depth.cpu().numpy()
-                
                     # plot both
                     fig, axes = plt.subplots(2, len(self.output_names), figsize=(20, 10))
-
                     pred_ax = axes[0]
                     
-                    # if pred_ax is a single axis, make it a list
-                    # if type(pred_ax) != list or type(pred_ax) != np.ndarray:
-                    #     pred_ax = [pred_ax]
                     for name, ax, p in zip(self.output_names, pred_ax, pred_depth):
                         ax.imshow(p)
                         ax.set_title(name)
+                        # Remove axes labels - choose one of these options:
+                        ax.set_xticks([])  # Remove x-axis ticks
+                        ax.set_yticks([])  # Remove y-axis ticks
+                        # OR use this to remove all axes elements:
+                        ax.axis('off')
                     
                     gt_ax = axes[1]
-                    # if type(gt_ax) != list or type(gt_ax) != np.ndarray:
-                    #     gt_ax = [gt_ax]
                     for name, ax, g in zip(self.output_names, gt_ax, gt_depth):
                         ax.imshow(g)
                         ax.set_title(name)
-
+                        # Remove axes labels - choose one of these options:
+                        ax.set_xticks([])  # Remove x-axis ticks
+                        ax.set_yticks([])  # Remove y-axis ticks
+                        # OR use this to remove all axes elements:
+                        ax.axis('off')
+                    
                     fig.savefig(osp.join(self.logger.save_dir, f"{name}_prediction_{batch_idx}_{i}.png"))
-                plt.close(fig)
+                    plt.close(fig)
         
         # unscale the prediction by each output scale
         pred_unit_scale = pred.clone()
@@ -839,12 +863,12 @@ def construct_student_encoders(encoder_paths, calibration_model):
 
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
-    arg.add_argument('--gpus', type=int, default=2)
+    arg.add_argument('--gpus', type=int, default=4)
     arg.add_argument('--exp_name', type=str, default="exp/base")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
     arg.add_argument('--logger', type=str, default="tensorboard")
-    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
+    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/es4t/es4t/dataset_local/")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
     arg.add_argument('--match_features_from_encoders', action='store_true')
@@ -964,11 +988,9 @@ if __name__ == '__main__':
             teacher_model = build_model(cfg_teacher)
             if cfg.model.LoRA:
                 teacher_model.replace_LoRA(cfg.model.LoRA_rank, cfg.model.LoRA_scale)
-
-            teacher_model.load_from_pretrained_model(encoder_path)   
+            teacher_model.load_from_pretrained_model(encoder_path, load_decoder=False)   
 
             # we can delete the decoder head
-            teacher_model.decoder_head = None
             teacher_models[output] = teacher_model
 
         # add teacher encoders!
@@ -997,7 +1019,6 @@ if __name__ == '__main__':
         # TODO: update this for densetact
         student_encoders = construct_student_encoders(opt.encoder_paths, calibration_model)
         calibration_model.set_student_encoders(student_encoders)
-
     if opt.eval:
         trainer.test(model=calibration_model, dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)
     else:
