@@ -12,6 +12,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, random_split
 import torchvision.models as models
 from torchvision import transforms
+from torchvision.transforms import functional as F
 from process_data import FullDataset
 from lightning.pytorch.loggers import TensorBoardLogger
 
@@ -36,7 +37,7 @@ class LightningDTModel(L.LightningModule):
         ):
         """ MAE Model for training on the DT dataset """
         super(LightningDTModel, self).__init__()
-        
+
         if model_name in pretrain_dict:
             if 'vit' in model_name:
                 self.model = pretrain_dict[model_name](img_size=256, in_chans=6)
@@ -55,9 +56,86 @@ class LightningDTModel(L.LightningModule):
         self.total_steps = total_steps
         self.mask_ratio = mask_ratio
         
+        # Color jitter parameters
+        self.brightness = 0.25
+        self.contrast = 0.25
+        self.saturation = 0.25
+        self.hue = 0.02
+
+    def setup(self, stage=None):
+        # populate only once
+        if self.global_rank == 0:
+            # Heavy I/O into SHARED_DATA
+            SHARED_DATA.zero_()                      # or copy_ from disk, etc.
+        # ensure others wait until it's ready
+        self.trainer.strategy.barrier()
+        
+    def apply_paired_color_jitter(self, x):
+        """Apply different color jitter params to each 3-channel half of 6-channel input"""
+        # x shape: (N, 6, H, W)
+        N, C, H, W = x.shape
+        
+        # Split into deformed and undeformed
+        deformed = x[:, :3]  # (N, 3, H, W)
+        undeformed = x[:, 3:]  # (N, 3, H, W)
+        
+        # Sample different jitter parameters for each half
+        # Deformed image parameters
+        def_brightness = torch.empty(N, device=x.device).uniform_(1-self.brightness, 1+self.brightness)
+        def_contrast = torch.empty(N, device=x.device).uniform_(1-self.contrast, 1+self.contrast)
+        def_saturation = torch.empty(N, device=x.device).uniform_(1-self.saturation, 1+self.saturation)
+        def_hue = torch.empty(N, device=x.device).uniform_(-self.hue, self.hue)
+        
+        # Undeformed image parameters (different from deformed)
+        undef_brightness = torch.empty(N, device=x.device).uniform_(1-self.brightness, 1+self.brightness)
+        undef_contrast = torch.empty(N, device=x.device).uniform_(1-self.contrast, 1+self.contrast)
+        undef_saturation = torch.empty(N, device=x.device).uniform_(1-self.saturation, 1+self.saturation)
+        undef_hue = torch.empty(N, device=x.device).uniform_(-self.hue, self.hue)
+        
+        # Apply transforms with different parameters for each half
+        for i in range(N):
+            # Different random order for each image
+            ops = ['brightness', 'contrast', 'saturation', 'hue']
+            def_order = torch.randperm(4)
+            undef_order = torch.randperm(4)
+            
+            # Apply to deformed image
+            for idx in def_order:
+                op = ops[idx]
+                if op == 'brightness':
+                    deformed[i] = F.adjust_brightness(deformed[i], def_brightness[i].item())
+                elif op == 'contrast':
+                    deformed[i] = F.adjust_contrast(deformed[i], def_contrast[i].item())
+                elif op == 'saturation':
+                    deformed[i] = F.adjust_saturation(deformed[i], def_saturation[i].item())
+                elif op == 'hue':
+                    deformed[i] = F.adjust_hue(deformed[i], def_hue[i].item())
+            
+            # Apply to undeformed image with different parameters
+            for idx in undef_order:
+                op = ops[idx]
+                if op == 'brightness':
+                    undeformed[i] = F.adjust_brightness(undeformed[i], undef_brightness[i].item())
+                elif op == 'contrast':
+                    undeformed[i] = F.adjust_contrast(undeformed[i], undef_contrast[i].item())
+                elif op == 'saturation':
+                    undeformed[i] = F.adjust_saturation(undeformed[i], undef_saturation[i].item())
+                elif op == 'hue':
+                    undeformed[i] = F.adjust_hue(undeformed[i], undef_hue[i].item())
+        
+        # Clamp to valid range and concatenate
+        deformed = torch.clamp(deformed, 0.0, 1.0)
+        undeformed = torch.clamp(undeformed, 0.0, 1.0)
+        
+        return torch.cat([deformed, undeformed], dim=1)
+        
     def training_step(self, batch, batch_idx):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
         X, _ = batch 
+        
+        # Apply paired color jitter on GPU
+        X = self.apply_paired_color_jitter(X)
+        
         N, C, H, W = X.shape 
         loss, pred, mask = self.model(X, self.mask_ratio) 
 
@@ -117,34 +195,36 @@ class LightningDTModel(L.LightningModule):
                 }}
 
 
+
+
+SHARED_DATA = torch.empty(10000, 6, 256, 256, dtype=torch.float16).share_memory_()
+
+
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
     arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/es4t/es4t/dataset_local/")
     arg.add_argument('--epochs', type=int, default=200)
     arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
-    arg.add_argument('--gpus', type=int, default=2)
+    arg.add_argument('--gpus', type=int, default=4)
     
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=64)
     arg.add_argument('--num_workers', type=int, default=24)
     arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="hiera_mae_sf")
+    arg.add_argument('--exp_name', type=str, default="mae_hiera")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     
     opt = arg.parse_args()
-    
     cfg = get_cfg_defaults()
     cfg.merge_from_file(opt.config)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     transform = transforms.Compose([
-        transforms.ToTensor(),
         transforms.Resize((256, 256), antialias=True),
-    ])
-    
+        ])
 
     extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
                           '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
@@ -153,6 +233,7 @@ if __name__ == '__main__':
                           extra_samples_dirs=extra_samples_dirs,
                           is_real_world=opt.real_world, is_mae=True)
     print("Dataset total samples: {}".format(len(dataset)))
+
 
     full_dataset_length = len(dataset)
     
@@ -175,8 +256,9 @@ if __name__ == '__main__':
     plt.savefig("sample_image.png")
     plt.close()
     
-    dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers)
-    test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=True, num_workers=12)
+    dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers,)
+    test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=True, num_workers=12, 
+                                 prefetch_factor=2)
     
     calibration_model = LightningDTModel(
         model_name=opt.model, 
@@ -185,6 +267,7 @@ if __name__ == '__main__':
         mask_ratio=opt.mask_ratio,
         learning_rate=8e-4
     )
+
 
     logger = TensorBoardLogger(osp.join(opt.exp_name, 'tb_logs/'), name="lightning_logs")
     
@@ -206,6 +289,7 @@ if __name__ == '__main__':
     # add callbacks
     callbacks = [checkpoint_callback, lr_monitor]
     trainer = L.Trainer(max_epochs=opt.epochs, callbacks=callbacks, logger=logger,
-                        accelerator="gpu", devices=opt.gpus, strategy=strategy)
+                        accelerator="gpu", devices=opt.gpus, strategy=strategy, profiler="simple")
     
+
     trainer.fit(model=calibration_model, train_dataloaders=dataloader, ckpt_path=opt.ckpt_path)
