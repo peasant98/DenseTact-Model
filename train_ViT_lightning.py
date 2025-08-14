@@ -996,7 +996,6 @@ if __name__ == '__main__':
         # add teacher encoders!
         calibration_model.set_teacher_encoders(teacher_models)
 
-
     # only load states for finetuning and model is densenet
     if opt.finetune and "densenet" in cfg.model.name:
         model_state = torch.load(opt.ckpt_path)

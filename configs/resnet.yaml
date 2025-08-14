@@ -1,5 +1,5 @@
-dataset_ratio: 1.0
-batch_size: 16
+dataset_ratio: 0.5
+batch_size: 24
 scale: 1.0
 epochs: 100
 
@@ -40,4 +40,4 @@ metric:
 
 scheduler:
   name: linear_cosine
-  warmup: 2000
+  warmup: 500
