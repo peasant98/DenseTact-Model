@@ -5,15 +5,45 @@ cfg = CN()
 
 cfg.epochs = 100
 cfg.batch_size = 16
-cfg.num_workers = 16
+cfg.num_workers = 12
 cfg.dataset_ratio = 1.
 # seed for every thing
 # include dataset split
 cfg.seed = 42
 cfg.scale = 1.
+cfg.use_vqgan = False
 
 cfg.gradient_clip_val = None
 cfg.gradient_clip_algorithm = None
+
+
+# VQ-GAN model configuration
+cfg.vq_gan_model = CN()
+cfg.vq_gan_model.embed_dim = 3
+cfg.vq_gan_model.n_embed = 1024
+
+# Decoder configuration
+cfg.vq_gan_model.ddconfig = CN()
+cfg.vq_gan_model.ddconfig.double_z = False
+cfg.vq_gan_model.ddconfig.z_channels = 3
+cfg.vq_gan_model.ddconfig.resolution = 128
+cfg.vq_gan_model.ddconfig.in_channels = 3
+cfg.vq_gan_model.ddconfig.out_ch = 3
+cfg.vq_gan_model.ddconfig.ch = 128
+cfg.vq_gan_model.ddconfig.ch_mult = [1, 1, 2, 4]  # representation shape 16x20
+cfg.vq_gan_model.ddconfig.num_res_blocks = 2
+cfg.vq_gan_model.ddconfig.attn_resolutions = [16]
+cfg.vq_gan_model.ddconfig.dropout = 0.0
+
+# Loss configuration
+cfg.vq_gan_model.lossconfig = CN()
+cfg.vq_gan_model.lossconfig.target = "UniT.taming.modules.losses.vqperceptual.VQLPIPSWithDiscriminator"
+cfg.vq_gan_model.lossconfig.params = CN()
+cfg.vq_gan_model.lossconfig.params.disc_conditional = False
+cfg.vq_gan_model.lossconfig.params.disc_in_channels = 3
+cfg.vq_gan_model.lossconfig.params.disc_start = 10000
+cfg.vq_gan_model.lossconfig.params.disc_weight = 0.8
+cfg.vq_gan_model.lossconfig.params.codebook_weight = 1.0
 
 
 cfg.teacher_encoders = CN()

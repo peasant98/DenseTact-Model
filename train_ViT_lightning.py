@@ -11,6 +11,7 @@ from copy import deepcopy
 import matplotlib as mpl
 import wandb
 import datetime
+from termcolor import cprint
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -25,10 +26,11 @@ from process_data import FullDataset, FEAT_CHANNEL
 
 from torchmetrics.functional import structural_similarity_index_measure
 
+from torch.cuda.amp import autocast
+
 
 import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
-
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 
@@ -41,6 +43,7 @@ from util.scheduler_util import LinearWarmupCosineAnnealingLR
 from models.dense import DecoderNHead
 
 from tqdm import tqdm
+from copy import deepcopy
 
 def apply_colormap(depth_map, cmap='viridis'):  
     depth_map_normalized = (depth_map - np.min(depth_map)) / (np.max(depth_map) - np.min(depth_map) + 0.00001)  # Normalize to [0, 1]
@@ -48,202 +51,6 @@ def apply_colormap(depth_map, cmap='viridis'):
     depth_map_colored = colormap(depth_map_normalized)[:, :, :3]  # Get RGB values, ignore alpha channel
     depth_map_colored = (depth_map_colored * 255).astype(np.uint8)  # Convert to 8-bit image
     return depth_map_colored
-
-
-class LogScaleMSELoss(nn.Module):
-    """
-    Mean Squared Error loss in log space to handle very small values effectively.
-    
-    This loss transforms both predictions and targets to logarithmic space before
-    computing MSE, making it more sensitive to small values.
-    
-    Args:
-        epsilon (float): Small constant added to prevent log(0) issues. Default: 1e-6
-        reduction (str): Specifies the reduction to apply to the output:
-            'none' | 'mean' | 'sum'. Default: 'mean'
-    """
-    def __init__(self, epsilon=1e-6, reduction='mean'):
-        super(LogScaleMSELoss, self).__init__()
-        self.epsilon = epsilon
-        self.reduction = reduction
-    
-    def forward(self, pred, target):
-        """
-        Args:
-            pred (Tensor): The prediction tensor
-            target (Tensor): The target tensor
-            
-        Returns:
-            Tensor: The computed loss
-        """
-        # Apply sign-preserving log transform
-        log_pred = torch.sign(pred) * torch.log(torch.abs(pred) + self.epsilon)
-        log_target = torch.sign(target) * torch.log(torch.abs(target) + self.epsilon)
-        
-        # Compute MSE in log space
-        squared_diff = (log_pred - log_target) ** 2
-        
-        # Apply reduction
-        if self.reduction == 'none':
-            return squared_diff
-        elif self.reduction == 'sum':
-            return torch.sum(squared_diff)
-        elif self.reduction == 'mean':
-            return torch.mean(squared_diff)
-        else:
-            raise ValueError(f"Invalid reduction mode: {self.reduction}")
-
-class EdgeAwareL1Loss(nn.Module):
-    def __init__(self, alpha=1.0):
-        super(EdgeAwareL1Loss, self).__init__()
-        self.alpha = alpha  # This controls the influence of the edge map
-
-        # Define Sobel filters for edge detection
-        self.sobel_kernel_x = torch.tensor([[-1, 0, 1],
-                                            [-2, 0, 2],
-                                            [-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-        
-        self.sobel_kernel_y = torch.tensor([[-1, -2, -1],
-                                            [0, 0, 0],
-                                            [1, 2, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-
-    def forward(self, pred, target):
-        """
-        Compute the Edge-aware L1 loss between two images: `pred` and `target`.
-        
-        Arguments:
-        pred -- Predicted image (tensor of shape: N x C x H x W)
-        target -- Target ground truth image (tensor of shape: N x C x H x W)
-        
-        Returns:
-        loss -- The Edge-aware L1 loss between the predicted and target images.
-        """
-        # Step 1: Compute the standard L1 loss
-        l1_loss = torch.abs(pred - target)
-
-        # Step 2: Compute gradients (edges) of the predicted image using Sobel filters
-        edge_x = F.conv2d(pred, self.sobel_kernel_x, padding=1, stride=1)
-        edge_y = F.conv2d(pred, self.sobel_kernel_y, padding=1, stride=1)
-
-        # Step 3: Compute the gradient magnitude (edge strength)
-        edge_magnitude = torch.sqrt(edge_x ** 2 + edge_y ** 2)
-
-        # Step 4: Normalize edge magnitude to [0, 1] range
-        edge_magnitude = edge_magnitude / (edge_magnitude.max() + 1e-6)
-
-        # Step 5: Weight the L1 loss with the edge map
-        edge_aware_loss = l1_loss * (1 + self.alpha * edge_magnitude)
-
-        # Step 6: Return the mean loss across the batch and spatial dimensions
-        return edge_aware_loss.mean()
-    
-def compute_gradient(image):
-    """Compute gradients in x and y directions for a given image."""
-    grad_x = image[:, :, :, 1:] - image[:, :, :, :-1]
-    grad_y = image[:, :, 1:, :] - image[:, :, :-1, :]
-    return grad_x, grad_y
-
-def combined_loss(d_hat, d_star, weight_gradient=0.5, weight_l1=0.5):
-    """
-    Compute the combined loss: weighted sum of gradient matching loss and L1 loss.
-    
-    Parameters:
-        d_hat (torch.Tensor): Predicted disparity map, shape (B, H, W).
-        d_star (torch.Tensor): Ground truth disparity map, shape (B, H, W).
-        weight_gradient (float): Weight for the gradient matching loss.
-        weight_l1 (float): Weight for the L1 loss.
-    
-    Returns:
-        torch.Tensor: Combined loss.
-    """
-    # Compute residual map
-    residual = d_hat - d_star
-
-    # Compute gradients
-    grad_x, grad_y = compute_gradient(residual)
-    
-    # Gradient matching loss
-    gradient_loss = (grad_x.abs().mean() + grad_y.abs().mean())
-    
-    # L1 loss
-    l1_loss = torch.abs(residual).mean()
-    
-    # Combined loss
-    total_loss = weight_gradient * gradient_loss + weight_l1 * l1_loss
-    return total_loss
-
-
-class L1WithGradientLoss(nn.Module):
-    def __init__(self, weight_gradient=0.2, weight_l1=0.8):
-        super(L1WithGradientLoss, self).__init__()
-        self.weight_gradient = weight_gradient
-        self.weight_l1 = weight_l1
-    
-    def forward(self, pred, target):
-        """
-        Compute the combined loss: weighted sum of gradient matching loss and L1 loss.
-        
-        Arguments:
-        pred -- Predicted disparity map (tensor of shape: N x H x W)
-        target -- Target ground truth disparity map (tensor of shape: N x H x W)
-        
-        Returns:
-        loss -- The combined loss between the predicted and target disparity maps.
-        """
-        # Step 1: Compute the combined loss
-        loss = 0
-        for i in range(pred.shape[1]):
-            pred_channel = pred[:, i, :, :]
-            target_channel = target[:, i, :, :]
-            pred_channel = pred_channel.unsqueeze(1)
-            target_channel = target_channel.unsqueeze(1)
-            loss += combined_loss(pred_channel, target_channel, self.weight_gradient, self.weight_l1)
-        
-        # Step 2: Return the loss
-        return loss
-    
-    
-# create channel-wise ssim loss
-class L1WithSSIMLoss(nn.Module):
-    def __init__(self):
-        super(SSIMLoss, self).__init__()
-        self.ssim = structural_similarity_index_measure
-        # bias to have positive values
-        self.bias = 10
-        self.alpha = 0.2
-        
-    def forward(self, pred, target):
-        """
-        Compute the SSIM loss between two images: `pred` and `target`.
-        
-        Arguments:
-        pred -- Predicted image (tensor of shape: N x C x H x W)
-        target -- Target ground truth image (tensor of shape: N x C x H x W)
-        
-        Returns:
-        loss -- The SSIM loss between the predicted and target images.
-        """
-        ssim_loss = 0
-        l1_loss = torch.abs(pred - target)
-        l1_loss = l1_loss.mean()  # Mean L1 loss across the batch and spatial dimensions
-        # go trhough each channel
-        for i in range(pred.shape[1]):
-            pred_channel = pred[:, i, :, :]
-            target_channel = target[:, i, :, :]
-            
-            # get max of either pred or target
-            max_val = torch.max(pred_channel.max(), target_channel.max())
-            min_val = torch.min(pred_channel.min(), target_channel.min())
-            # min-max normalization
-            pred_channel = (pred_channel - min_val) / (max_val - min_val + 1e-6)
-            target_channel = (target_channel - min_val) / (max_val - min_val + 1e-6)
-            pred_channel = pred_channel.unsqueeze(1)
-            target_channel = target_channel.unsqueeze(1)
-            ssim_loss += (1 - self.ssim(pred_channel, target_channel))
-        # Step 1: Compute the SSIM loss
-        
-        # Step 2: Return the mean loss across the batch and spatial dimensions
-        return self.alpha * ssim_loss.mean() + l1_loss
 
 class LightningDTModel(L.LightningModule):
     OUTPUT_ORDER = ["depth", "stress_x", "stress_y", "stress_z"]
@@ -254,26 +61,26 @@ class LightningDTModel(L.LightningModule):
         self.cfg = cfg
 
         self.model = build_model(cfg)
-        
+
+        # if cfg.model.LoRA:
+        #     self.model.replace_LoRA(cfg.model.LoRA_rank, cfg.model.LoRA_scale)
         if len(self.cfg.model.pretrained_model) > 0:
             print("Load pretrained model")
+            # self.model.load_from_pretrained_model(self.cfg.model.pretrained_model, load_decoder=True) 
             self.model.load_from_pretrained_model(self.cfg.model.pretrained_model)   
+
+            if cfg.model.name != "DenseNetV2":
+                # todo: see if we need to freeze encoder
+                self.model.freeze_encoder()
             
-            # todo: see if we need to freeze encoder
-            self.model.freeze_encoder()
-        
-            # use LoRA finetune
-            if cfg.model.LoRA:
-                self.model.replace_LoRA(self.cfg.model.LoRA_rank, self.cfg.model.LoRA_scale)
+                # use LoRA finetune
+                if cfg.model.LoRA:
+                    self.model.replace_LoRA(self.cfg.model.LoRA_rank, self.cfg.model.LoRA_scale)
         
         if cfg.model.loss == "L1":
             self.criterion = nn.L1Loss()
         elif cfg.model.loss == "L2":
             self.criterion = nn.MSELoss()
-        elif cfg.model.loss == "l1+ssim":
-            self.criterion = L1WithSSIMLoss()
-        elif cfg.model.loss == "l1+gradient":
-            self.criterion = L1WithGradientLoss()
         else:
             raise NotImplementedError("Loss not implemented {}".format(cfg.model.loss))
 
@@ -316,10 +123,14 @@ class LightningDTModel(L.LightningModule):
         self.validation_stats = {}
         self.smooth_l1_loss = nn.SmoothL1Loss()
         # this should be set in the config
-        self.beta = 0.9
+        self.beta = 1
+
+        self.z_curr_mean = None
+        self.z_curr_std = None
 
     def set_teacher_encoders(self, teacher_encoders_dict):
         self.teacher_encoders_dict = teacher_encoders_dict
+        
         
     def set_student_encoders(self, student_encoders):
         self.student_encoders = student_encoders
@@ -335,13 +146,17 @@ class LightningDTModel(L.LightningModule):
             for student_encoder in self.student_encoders:
                 student_encoder.eval().to(next(self.model.parameters()).device)
 
+        if hasattr(self, "teacher_encoders_dict"):
+            for enc_key in self.teacher_encoders_dict:
+                self.teacher_encoders_dict[enc_key].eval().to(next(self.model.parameters()).device)
+
     def on_train_epoch_start(self):
         """ 
         I decide to always freeze the encoder when loading from a pretrained model 
         If you want to finetune the encoder, you can load from a checkpoint and set the pretrained_model to ""
         """
         epoch = self.current_epoch
-        if len(self.cfg.model.pretrained_model) > 0 and epoch < 50:
+        if len(self.cfg.model.pretrained_model) > 0 and False:
             print("Freezing encoder when loading from pretrained model")
             self.model.freeze_encoder()
         else:
@@ -350,23 +165,28 @@ class LightningDTModel(L.LightningModule):
             self.model.unfreeze_encoder()
             # else:
             # self.model.unfreeze_encoder()
+
+        # Calculate trainable parameters
+        # trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        # total_params = sum(p.numel() for p in self.model.parameters())
+        # print(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({100 * trainable_params / total_params:.2f}%)")
+        
             
     def training_step(self, batch, batch_idx):
         X, Y = batch 
         
-        # get epoch
-        
         # # force Negative samples to be 0
         # Y = torch.where(torch.abs(Y) < self.cfg.metric.PN_thresh, torch.zeros_like(Y), Y)
         N, C, H, W = X.shape 
-        
-        if self.cfg.model.encoder == "densenet":
+
+        if self.cfg.model.encoder == "densenet" or self.cfg.model.encoder == "resnet":
             pred, z = self.model(X)
         else:
             if self.cfg.model.hiera.return_encoder_output:
                 pred, z = self.model(X) 
             else:
                 pred = self.model(X)
+
         # get the output of each encoder
         z_loss = 0
         if hasattr(self, "student_encoders"):
@@ -381,20 +201,39 @@ class LightningDTModel(L.LightningModule):
                 z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
                 
         if self.cfg.model.hiera.return_encoder_output:
-            # go through the teachers 
-            for key in self.teacher_encoders_dict.keys():
-                teacher_model = self.teacher_encoders_dict[key]
-                # run inference
-                student_z, output = teacher_model(X)
+            # go through the teachers and compute similarity
+            z_loss = 0.0  # Initialize z_loss
 
-                cosine_loss = (1 - F.cosine_similarity(student_z, z, dim=1).mean())
-                smooth_l1_loss = self.smooth_l1_loss(student_z, z)
-                
-                # get l1 loss between student_pred and z
-                z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
+            # Theia loss of cosine similarity and L1 loss
+            # Make sure features are normalized!
+            with autocast():
+                for key in self.teacher_encoders_dict.keys():
+                    teacher_model = self.teacher_encoders_dict[key]
+                    # Run inference on teacher model
+                    _, teacher_z = teacher_model(X)
+
+                    # shape is torch.Size([8, 96, 64, 64])
+                    # t_mean = teacher_z.mean(dim=[0, 2, 3], keepdim=True)  # Shape: [1, 96, 1, 1]
+                    # t_std = teacher_z.std(dim=[0, 2, 3], keepdim=True)    # Shape: [1, 96, 1, 1]
+                    # norm_teacher_z = (teacher_z - t_mean) / (t_std + 1e-5)
+
+                    # # remove gradients from normal_teacher_z
+                    # norm_teacher_z = norm_teacher_z.detach()
+                             
+                    # Compute losses
+                    cosine_loss = (1 - F.cosine_similarity(teacher_z, z, dim=-1).mean())
+                    smooth_l1_loss = self.smooth_l1_loss(teacher_z, z)
+                    
+                    # Accumulate loss
+                    z_loss += 1 * (self.beta * cosine_loss + (1 - self.beta) * smooth_l1_loss)
+                    
         
+        z_loss *= 10
+
+        # log the total z loss
+        self.log(f'train/z_loss', z_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         loss = z_loss
-        total_loss = 0. 
+        total_loss = z_loss
         predict_dict = self._process_prediction(pred)
         label_dict = self._process_prediction(Y)
 
@@ -703,13 +542,15 @@ class LightningDTModel(L.LightningModule):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
         X, Y = batch 
         N, C, H, W = X.shape 
-        
+
         # if model is densenet, get the z value
-        if self.cfg.model.encoder == "densenet":
+        if self.cfg.model.encoder == "densenet" or self.cfg.model.encoder == "resnet":
             pred, z = self.model(X)
         else: 
-            pred = self.model(X)
-            
+            if self.cfg.model.hiera.return_encoder_output:
+                pred, z = self.model(X) 
+            else:
+                pred = self.model(X)
 
         with torch.no_grad():
             # visualize the reconstructed images
@@ -719,38 +560,37 @@ class LightningDTModel(L.LightningModule):
                     X0 = X[i].detach().clone()
                     gt_def = X0[:3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
                     gt_undef = X0[3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
-                    
                     self.logger.experiment.add_image(f'{name}/gt/deform_color_{i}', gt_def, self.global_step)
                     self.logger.experiment.add_image(f'{name}/gt/undeform_color_{i}', gt_undef, self.global_step)
-                    
                     gt_depth = Y[i].detach().clone()
                     gt_depth = gt_depth.cpu().numpy()
-                    
                     pred_depth = pred[i].detach().clone()
                     pred_depth = pred_depth.cpu().numpy()
-                
                     # plot both
                     fig, axes = plt.subplots(2, len(self.output_names), figsize=(20, 10))
-
                     pred_ax = axes[0]
                     
-                    # if pred_ax is a single axis, make it a list
-                    # if type(pred_ax) != list or type(pred_ax) != np.ndarray:
-                    #     pred_ax = [pred_ax]
                     for name, ax, p in zip(self.output_names, pred_ax, pred_depth):
                         ax.imshow(p)
                         ax.set_title(name)
+                        # Remove axes labels - choose one of these options:
+                        ax.set_xticks([])  # Remove x-axis ticks
+                        ax.set_yticks([])  # Remove y-axis ticks
+                        # OR use this to remove all axes elements:
+                        ax.axis('off')
                     
                     gt_ax = axes[1]
-                    # if type(gt_ax) != list or type(gt_ax) != np.ndarray:
-                    #     gt_ax = [gt_ax]
                     for name, ax, g in zip(self.output_names, gt_ax, gt_depth):
                         ax.imshow(g)
                         ax.set_title(name)
-
+                        # Remove axes labels - choose one of these options:
+                        ax.set_xticks([])  # Remove x-axis ticks
+                        ax.set_yticks([])  # Remove y-axis ticks
+                        # OR use this to remove all axes elements:
+                        ax.axis('off')
+                    
                     fig.savefig(osp.join(self.logger.save_dir, f"{name}_prediction_{batch_idx}_{i}.png"))
-                plt.close(fig)
-        
+                    plt.close(fig)
         
         # unscale the prediction by each output scale
         pred_unit_scale = pred.clone()
@@ -1028,7 +868,7 @@ if __name__ == '__main__':
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--config', type=str, default="configs/densenet_real_all.yaml")
     arg.add_argument('--logger', type=str, default="tensorboard")
-    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/real_world_dataset")
+    arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/es4t/es4t/dataset_local/")
     arg.add_argument('--eval', action='store_true')
     arg.add_argument('--finetune', action='store_true')
     arg.add_argument('--match_features_from_encoders', action='store_true')
@@ -1053,6 +893,11 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
 
+
+    # extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/sf2t/dataset_local/', 
+                        #   '/arm/u/maestro/Desktop/DenseTact-Model/sf3t/dataset_local/',
+                        #   '/arm/u/maestro/Desktop/DenseTact-Model/sf4t/dataset_local/']
+
     extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
                           '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
                           '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
@@ -1061,6 +906,7 @@ if __name__ == '__main__':
                           extra_samples_dirs=extra_samples_dirs,
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
     
+
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
     # go through some samples in the dataset
@@ -1080,7 +926,6 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=12)
 
     calibration_model = LightningDTModel(cfg)
-
 
     # get date
     date = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -1115,8 +960,9 @@ if __name__ == '__main__':
 
     # load the hiera encoders if desired
     teacher_models = {}
+
     if cfg.model.hiera.return_encoder_output:
-        for output in cfg.dataset.output_type:
+        for output in tqdm(cfg.dataset.output_type, desc="Loading teacher models", unit="item"):
             # get the encoder path
             if output == "cnorm":
                 encoder_path = cfg.teacher_encoders.cnorm_path
@@ -1129,14 +975,26 @@ if __name__ == '__main__':
             elif output == "stress2":
                 encoder_path = cfg.teacher_encoders.stress2_path
 
+            if len(encoder_path) == 0:
+                # no need to supervise on this model
+                continue
+
+            # create copy of the cfg
+            cfg_teacher = deepcopy(cfg)
+            cfg_teacher.model.out_chans = [3]
+
             # load only the encoder
-            teacher_model = build_model(cfg)
-            teacher_model.load_from_pretrained_model(encoder_path)   
+            cprint(f"Loading {output} model", "green")
+            teacher_model = build_model(cfg_teacher)
+            if cfg.model.LoRA:
+                teacher_model.replace_LoRA(cfg.model.LoRA_rank, cfg.model.LoRA_scale)
+            teacher_model.load_from_pretrained_model(encoder_path, load_decoder=False)   
+
+            # we can delete the decoder head
             teacher_models[output] = teacher_model
 
         # add teacher encoders!
         calibration_model.set_teacher_encoders(teacher_models)
-
 
     # only load states for finetuning and model is densenet
     if opt.finetune and "densenet" in cfg.model.name:
@@ -1157,9 +1015,9 @@ if __name__ == '__main__':
         opt.ckpt_path = None
     
     if opt.match_features_from_encoders:
+        # TODO: update this for densetact
         student_encoders = construct_student_encoders(opt.encoder_paths, calibration_model)
         calibration_model.set_student_encoders(student_encoders)
-    
     if opt.eval:
         trainer.test(model=calibration_model, dataloaders=test_dataloader, ckpt_path=opt.ckpt_path)
     else:

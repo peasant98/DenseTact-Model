@@ -21,6 +21,7 @@ from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 
 from models import pretrain_dict
+from streaming_data import get_densetact_dataset, build_output_mask
 from util.loss_util import ssim
 from util.scheduler_util import LinearWarmupCosineAnnealingLR
 
@@ -61,14 +62,6 @@ class LightningDTModel(L.LightningModule):
         self.contrast = 0.25
         self.saturation = 0.25
         self.hue = 0.02
-
-    def setup(self, stage=None):
-        # populate only once
-        if self.global_rank == 0:
-            # Heavy I/O into SHARED_DATA
-            SHARED_DATA.zero_()                      # or copy_ from disk, etc.
-        # ensure others wait until it's ready
-        self.trainer.strategy.barrier()
         
     def apply_paired_color_jitter(self, x):
         """Apply different color jitter params to each 3-channel half of 6-channel input"""
@@ -195,24 +188,19 @@ class LightningDTModel(L.LightningModule):
                 }}
 
 
-
-
-SHARED_DATA = torch.empty(10000, 6, 256, 256, dtype=torch.float16).share_memory_()
-
-
 if __name__ == '__main__':
     arg = argparse.ArgumentParser()
     arg.add_argument('--dataset_ratio', type=float, default=1.0)
     arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/es4t/es4t/dataset_local/")
     arg.add_argument('--epochs', type=int, default=200)
     arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
-    arg.add_argument('--gpus', type=int, default=4)
+    arg.add_argument('--gpus', type=int, default=2)
     
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=64)
-    arg.add_argument('--num_workers', type=int, default=24)
+    arg.add_argument('--num_workers', type=int, default=20)
     arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="mae_hiera")
+    arg.add_argument('--exp_name', type=str, default="mae_hiera_faster")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     
@@ -229,41 +217,135 @@ if __name__ == '__main__':
     extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
                           '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
                           '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
-    dataset = FullDataset(cfg, transform=transform, samples_dir=opt.dataset_dir, 
-                          extra_samples_dirs=extra_samples_dirs,
-                          is_real_world=opt.real_world, is_mae=True)
-    print("Dataset total samples: {}".format(len(dataset)))
 
+    transform_X = transforms.Compose([
+        transforms.ToTensor(),                       # (H,W,6)->(6,H,W) in [0,1]
+        transforms.Resize((256, 256), antialias=True),
+    ])
+    transform_y = transforms.Compose([
+        transforms.ToTensor(),                       # (H,W,C)->(C,H,W)
+        transforms.Resize((256, 256), antialias=True),
+    ])
 
-    full_dataset_length = len(dataset)
-    
-    # take only 10 percent of dataset for train and test
-    dataset_length = int(opt.dataset_ratio * full_dataset_length)
-    train_size = int(0.95 * dataset_length)
-    test_size = dataset_length - train_size
-    
-    train_dataset, test_dataset, _ = random_split(dataset, [train_size, test_size, full_dataset_length - dataset_length])
-    print(f"Train dataset length: {len(train_dataset)}, Test dataset length: {len(test_dataset)}")
-    
-    X, y = dataset[1000]
-    deform_color = X[:3, :, :].detach().cpu().numpy()
-    undeform_color = X[3:6, :, :].detach().cpu().numpy()
-    fig, ax = plt.subplots(1, 2)
-    ax[0].imshow(deform_color.transpose(1, 2, 0))
-    ax[0].set_title("Deformed Image")
-    ax[1].imshow(undeform_color.transpose(1, 2, 0))
-    ax[1].set_title("Undeformed Image")
-    plt.savefig("sample_image.png")
-    plt.close()
-    
-    dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers,)
-    test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=True, num_workers=12, 
-                                 prefetch_factor=2)
+    # roots to stream from (main + extras)
+    roots = [opt.dataset_dir] + [
+        '/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/',
+        '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
+        '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/',
+    ]
+
+    output_types = []             # ignored when is_mae=True
+    is_mae = True
+
+    # Choose ONE of the two modes:
+
+    USE_STREAMING = True  # flip this to False for map-style with true random indexing
+    import pdb; pdb.set_trace()  # for debugging purposes, remove in production
+    if USE_STREAMING:
+        # Optional deterministic split: 95/5 using modulo on sample id
+        split_mod = 20
+        train_remainders = set(range(1, 20))  # 95%
+        val_remainders   = {0}                # 5%
+
+        train_ds = get_densetact_dataset(
+            mode='stream',
+            samples_roots=roots,
+            output_types=output_types,
+            transform_X=transform_X,
+            transform_y=transform_y,
+            is_mae=is_mae,
+            normalization=False,
+            contiguous_on_direction=False,
+            shuffle_buffer=8192,
+            epoch_size=33_000,        # pick a target steps/epoch you want Lightning to see
+            rng_seed=42,
+            split_mod=split_mod,
+            split_remainders=train_remainders,
+        )
+        val_ds = get_densetact_dataset(
+            mode='stream',
+            samples_roots=roots,
+            output_types=output_types,
+            transform_X=transform_X,
+            transform_y=transform_y,
+            is_mae=is_mae,
+            normalization=False,
+            contiguous_on_direction=False,
+            shuffle_buffer=8192,
+            epoch_size=2_500,         # smaller validation epoch length
+            rng_seed=123,             # different seed
+            split_mod=split_mod,
+            split_remainders=val_remainders,
+        )
+
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=opt.batch_size,
+            num_workers=opt.num_workers,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=4,
+            # shuffle must be False for IterableDataset
+            shuffle=False,
+        )
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=16,
+            num_workers=min(12, opt.num_workers),
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=2,
+            shuffle=False,
+        )
+
+    else:
+        # Map-style: indexable dataset; supports shuffle=True and random_split.
+        base_ds = get_densetact_dataset(
+            mode='map',
+            samples_roots=roots,
+            output_types=output_types,
+            transform_X=transform_X,
+            transform_y=transform_y,
+            is_mae=is_mae,
+            normalization=False,
+            contiguous_on_direction=False,
+        )
+        full_len = len(base_ds)
+        dataset_length = int(opt.dataset_ratio * full_len)
+        train_size = int(0.95 * dataset_length)
+        val_size = dataset_length - train_size
+        train_ds, val_ds, _ = random_split(base_ds, [train_size, val_size, full_len - dataset_length])
+
+        train_loader = DataLoader(
+            train_ds, batch_size=opt.batch_size, shuffle=True,
+            num_workers=opt.num_workers, pin_memory=True, persistent_workers=True, prefetch_factor=4
+        )
+        val_loader = DataLoader(
+            val_ds, batch_size=16, shuffle=False,
+            num_workers=min(12, opt.num_workers), pin_memory=True, persistent_workers=True, prefetch_factor=2
+        )
+
+    # (Optional) quick sanity check instead of dataset[1000] (no __getitem__ in IterableDataset)
+    try:
+        X_batch, y_dummy = next(iter(train_loader))
+        deform_color = X_batch[0, :3].detach().cpu().numpy()
+        undeform_color = X_batch[0, 3:6].detach().cpu().numpy()
+        fig, ax = plt.subplots(1, 2)
+        ax[0].imshow(deform_color.transpose(1, 2, 0))
+        ax[0].set_title("Deformed Image")
+        ax[1].imshow(undeform_color.transpose(1, 2, 0))
+        ax[1].set_title("Undeformed Image")
+        plt.savefig("sample_image.png")
+        plt.close()
+    except StopIteration:
+        print("Streaming dataset yielded no batches. Check your X*/y* folders.")
+    # -------------------------------------------------------------------------------
+
     
     calibration_model = LightningDTModel(
         model_name=opt.model, 
         num_epochs=opt.epochs,
-        total_steps=opt.epochs * len(train_dataset),
+        total_steps=opt.epochs,
         mask_ratio=opt.mask_ratio,
         learning_rate=8e-4
     )
@@ -292,4 +374,4 @@ if __name__ == '__main__':
                         accelerator="gpu", devices=opt.gpus, strategy=strategy, profiler="simple")
     
 
-    trainer.fit(model=calibration_model, train_dataloaders=dataloader, ckpt_path=opt.ckpt_path)
+    trainer.fit(model=calibration_model, train_dataloaders=train_loader, ckpt_path=opt.ckpt_path)

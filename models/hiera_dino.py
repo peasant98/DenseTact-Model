@@ -63,6 +63,7 @@ class DPTHead(nn.Module):
         super(DPTHead, self).__init__()
         
         self.use_clstoken = use_clstoken
+        
         self.projects = nn.ModuleList([
             nn.Conv2d(
                 in_channels=in_channels,
@@ -123,10 +124,11 @@ class DPTHead(nn.Module):
         self.scratch.output_conv1 = nn.Conv2d(head_features_1, head_features_1 // 2, kernel_size=3, stride=1, padding=1)
         self.scratch.output_conv2 = nn.Sequential(
             nn.Conv2d(head_features_1 // 2, head_features_2, kernel_size=3, stride=1, padding=1),
-            nn.ELU(True),
+            nn.ReLU(True),
             nn.Conv2d(head_features_2, output_dim, kernel_size=1, stride=1, padding=0),
+            nn.ReLU(True),
+            nn.Identity(),
         )
-        
     
     def forward(self, out_features, patch_h, patch_w):
         out = []
@@ -160,7 +162,7 @@ class DPTHead(nn.Module):
         out = self.scratch.output_conv1(path_1)
         out = F.interpolate(out, (int(patch_h * 16), int(patch_w * 16)), mode="bilinear", align_corners=True)
         out = self.scratch.output_conv2(out)
-
+        
         return out
 
 class HieraDPTHead(nn.Module):
@@ -493,7 +495,7 @@ class HieraQUpsampingDecoder(nn.Module):
 
         # rearrange the output shape
         self.spatial_decoders = nn.ModuleList([
-            nn.Sequential(  
+            nn.Sequential(
                 nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
                 nn.Conv2d(in_channels[0], in_channels[0] // 2, kernel_size=3, stride=1, padding=1),
                 nn.ELU(True),
@@ -558,13 +560,11 @@ class HieraQUpsampingDecoder(nn.Module):
         x = x.permute(0, 3, 1, 2)     # (B, C, H, W)
         
         pred = []
-        # check out shape of x
-        
         # maybe output z as x here?
         for spatial_decoder in self.spatial_decoders:
             pred.append(spatial_decoder(x))
         pred = torch.cat(pred, dim=1)
-        return pred, x
+        return pred
     
 
 class DPTV2Net(nn.Module):
@@ -574,19 +574,13 @@ class DPTV2Net(nn.Module):
         patch_size=16,
         in_chans=3,
         encoder='vitl', 
-        encoder_name='vitb',
         features=256, 
         out_channels=[256, 512, 1024, 1024], 
-        out_dims=[3,3,3,3,3],
+        out_dims=15,
         use_bn=False, 
         use_clstoken=False
     ):
         super(DPTV2Net, self).__init__()
-
-
-        cumulative_dims = 0
-        for out_dim in out_dims:
-            cumulative_dims += out_dim
         
         self.intermediate_layer_idx = {
             'vits': [2, 5, 8, 11],
@@ -594,34 +588,27 @@ class DPTV2Net(nn.Module):
             'vitl': [4, 11, 17, 23], 
             'vitg': [9, 19, 29, 39]
         }
-
-        # construct vit encoder
+        
         self.encoder = encoder
-        self.encoder_name = encoder_name
-
-
-        # self.pretrained = DINOv2(model_name=encoder, img_size=img_size, in_chans=in_chans, patch_size=patch_size)
-        self.depth_head = DPTHead(self.encoder.embed_dim, features, use_bn, output_dim=cumulative_dims, 
+        self.pretrained = DINOv2(model_name=encoder, img_size=img_size, in_chans=in_chans, patch_size=patch_size)
+        self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, output_dim=out_dims, 
                                 out_channels=out_channels, use_clstoken=use_clstoken)
     
     def forward(self, x):
         patch_h, patch_w = x.shape[-2] // 16, x.shape[-1] // 16
-
-        latent = self.encoder.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder_name], return_class_token=True)
-
         # extract intermediate features.
-        # features = self.pretrained.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder], return_class_token=True)
+        features = self.pretrained.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder], return_class_token=True)
         # predictions
-        depth = self.depth_head(latent, patch_h, patch_w)
+        depth = self.depth_head(features, patch_h, patch_w)
 
         return depth
     
     def freeze_encoder(self):
-        for param in self.encoder.parameters():
+        for param in self.pretrained.parameters():
             param.requires_grad = False
 
     def unfreeze_encoder(self):
-        for param in self.encoder.parameters():
+        for param in self.pretrained.parameters():
             param.requires_grad = True
 
     def load_from_pretrained_model(self, model_path:str):
@@ -629,21 +616,9 @@ class DPTV2Net(nn.Module):
         Load weights from a pre-trained model
         """
         model_ckpt = torch.load(model_path)
-        print("Pretrained model epochs: ", model_ckpt["epoch"])
 
         # load encoder weights
-        patch_embed_dict = {'.'.join(k.split('.')[2:]):v for k, v in model_ckpt["state_dict"].items() if 'patch_embed' in k}
-        self.encoder.patch_embed.load_state_dict(patch_embed_dict)
-        
-        self.encoder.cls_token.data.copy_(model_ckpt["state_dict"]['model.cls_token'])
-        self.encoder.pos_embed.data.copy_(model_ckpt["state_dict"]["model.pos_embed"])
-
-        for i, blk in enumerate(self.encoder.blocks):
-            block_dict = {'.'.join(k.split('.')[3:]):v for k, v in model_ckpt["state_dict"].items() if 'model.blocks' in k}
-            blk.load_state_dict(block_dict)
-
-        # load encoder weights
-        # self.pretrained.load_state_dict(model_ckpt["model"]['pretrained'])
+        self.pretrained.load_state_dict(model_ckpt["model"]['pretrained'])
 
 class HieraDPT(nn.Module):
     def __init__(
@@ -684,58 +659,14 @@ class HieraDPT(nn.Module):
         encoder_channels = self.encoder.get_out_dim(True)
         encoder_channels = encoder_channels[:self.encoder.q_pool] + encoder_channels[-1:]
 
-        if cfg.model.hiera.decoder == "DPT":
-            self.decoder_head = nn.ModuleList([
-                HieraDPTHead(cfg.model.hiera.decoder_embed_dim, 
-                                        encoder_channels, out_channels=cfg.model.hiera.decoder_mapping_channels, 
-                                        output_dim=out_dim, use_bn=cfg.model.hiera.use_bn, activation=cfg.model.hiera.activation)
-                for out_dim in out_dims
-            ])
-       
-        elif cfg.model.hiera.decoder == "Vanilla":
-
-            decoder_kwargs = dict(
-                decoder_embed_dim=cfg.model.hiera.decoder_embed_dim, 
-                decoder_num_heads=cfg.model.hiera.decoder_num_heads, 
-                q_pool=cfg.model.hiera.q_pool,
-                mlp_ratio=cfg.model.hiera.mlp_ratio,
-                mask_unit_size=self.encoder.mask_unit_size,
-                patch_stride = self.encoder.patch_stride,
-                q_stride = self.encoder.q_stride,
-                stage_ends = self.encoder.stage_ends,
-                tokens_spatial_shape = self.encoder.tokens_spatial_shape,
-                decoder_depth=cfg.model.hiera.decoder_depth)
-            
-            self.decoder_head = nn.ModuleList([
-                VanillaHieraFusionDecoder(encoder_channels, output_dim=out_dim, norm_layer=norm_layer, **decoder_kwargs)
-                for out_dim in out_dims
-            ])
-        
-        elif cfg.model.hiera.decoder == "QUpsampling":
-
-            decoder_kwargs = dict(
-                # decoder_embed_dim = cfg.model.hiera.decoder_embed_dim, 
-                decoder_num_heads=cfg.model.hiera.decoder_num_heads, 
-                mlp_ratio=cfg.model.hiera.mlp_ratio,
-                q_stride = self.encoder.q_stride,
-                decoder_depth_per_stage = cfg.model.hiera.decoder_depth_per_stage,
-                tokens_spatial_shape = self.encoder.tokens_spatial_shape)
-            
-            self.decoder_head = nn.ModuleList([
-                HieraQUpsampingDecoder(encoder_channels, output_dims=out_dims, norm_layer=norm_layer, **decoder_kwargs)
-                # for out_dim in out_dims
-            ])
-        
     def configure_optimizers(self, cfg):
         if cfg.optimizer.name == "Adam":
             optimizer = torch.optim.Adam([
-                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10},
-                {'params': [p for p in self.decoder_head.parameters() if p.requires_grad], 'lr': cfg.optimizer.lr}
+                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10}
             ])
         elif cfg.optimizer.name == "AdamW":
             optimizer = torch.optim.AdamW([
-                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10},
-                {'params': [p for p in self.decoder_head.parameters() if p.requires_grad], 'lr': cfg.optimizer.lr}
+                {'params': [p for p in self.encoder.parameters() if p.requires_grad] , 'lr': cfg.optimizer.lr / 10}
             ])
 
         return optimizer
@@ -744,23 +675,16 @@ class HieraDPT(nn.Module):
         replace_LoRA(self.encoder, MonkeyPatchLoRALinear, rank=rank, lora_scale=scale)
 
     def forward(self, x):
-        z, intermediates = self.encoder(x, None, return_intermediates=True)
+        _, intermediates = self.encoder(x, None, return_intermediates=True)
         intermediates = intermediates[: self.encoder.q_pool] + intermediates[-1:]
+
         # predictions
         preds = []
-        if self.decoder_head is None:
-            return None, z
-        
         for decoder in self.decoder_head:
-            # pred, trunk_z = decoder(intermediates)
-            pred = decoder(intermediates)
-
-            preds.append(pred)
+            preds.append(decoder(intermediates))
 
         preds = torch.cat(preds, dim=1)
 
-        if self.return_encoder_outputs:
-            return preds, None
 
         return preds     
 
@@ -774,7 +698,7 @@ class HieraDPT(nn.Module):
         for param in self.encoder.parameters():
             param.requires_grad = True
 
-    def load_from_pretrained_model(self, model_path:str, load_decoder=False):
+    def load_from_pretrained_model(self, model_path:str):
         model_ckpt = torch.load(model_path)
 
         # load encoder weights
@@ -782,32 +706,9 @@ class HieraDPT(nn.Module):
         for k in self.encoder.state_dict().keys():
             if 'model.' + k in model_ckpt["state_dict"]:
                 state_dict[k] = model_ckpt["state_dict"]['model.' + k]
-
-        # if state dict is empty take from model. encoder
-        if len(state_dict.keys()) == 0:
-            # load model encoder
-            for k in self.encoder.state_dict().keys():
-                if 'model.encoder.' + k in model_ckpt["state_dict"]:
-                    state_dict[k] = model_ckpt["state_dict"]['model.encoder.' + k]
-
+        # load state_dict
         res = self.encoder.load_state_dict(state_dict)
 
-        # now load from decoder
-        if load_decoder:
-            decoder_state_dict = {}
-            for k in self.decoder_head.state_dict().keys():
-                if 'model.decoder_head.' + k in model_ckpt["state_dict"]:
-                    decoder_state_dict[k] = model_ckpt["state_dict"]['model.decoder_head.' + k]
-            
-            # Load decoder state with strict=False
-            if len(decoder_state_dict) > 0:
-                decoder_res = self.decoder_head.load_state_dict(decoder_state_dict, strict=False)
-                print(f"Loaded encoder with: {res}")
-                print(f"Loaded decoder with: {decoder_res}")
-                print(f"Missing keys (initialized with default values): {decoder_res.missing_keys}")
-            else:
-                print(f"Loaded encoder with: {res}")
-                print("No matching decoder weights found in checkpoint")
 
 if __name__ == "__main__":
     from configs import get_cfg_defaults

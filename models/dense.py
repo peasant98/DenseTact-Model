@@ -53,9 +53,6 @@ class DTDenseNet(nn.Module):
         Load weights from a pre-trained model
         """
         # print in red color
-        print("\033[91m" + " [WARN] Pre-trained model not available for DenseNet. Skipping loading weights." + "\033[0m")
-
-        pass
 
     def freeze_encoder(self):
         """
@@ -174,7 +171,7 @@ class ResizeConv(nn.Module):
 class FullDecoder(nn.Module):
     def __init__(self, encoder_num_features, decoder_features,
                         decoder_mid_dim, decoder_output_dim,
-                        output_channels=1, decoder_N_head_info={'heads': 2, 'channels_per_head': 3}):
+                        output_channels=1, decoder_N_head_info={'heads': 5, 'channels_per_head': 3}):
         """
         Full Decoder of DenseNet
         encoder_num_features List[int]: number of features from the encoder, from deep to shallow 
@@ -370,11 +367,18 @@ class DTNet(nn.Module):
             self.decoders.append(FullDecoder(encoder_features, self.decoder_features, 
                                             cfg.model.cnn.decoder_mid_dim, cfg.model.cnn.decoder_output_dim,
                                             output_channels=head_output_channels))
-        
+    
+    def unfreeze_encoder(self):
+        """
+        Unfreeze the encoder weights
+        """
+        for param in self.encoder.parameters():
+            param.requires_grad = True
+            
     def forward(self, x):
         # Densenet Encoder
         x1, x2, x3, x4, x5 = self.encoder(x)
-        
+
         # for student teacher training, we will supervise the encoder output z
         z = x5
         
@@ -387,22 +391,33 @@ class DTNet(nn.Module):
         outputs = []
         for decoder in self.decoders:
             outputs.append(decoder(x5, [x4, x3, x2, x1, None]))
-            
+        
         # combine the outputs into:
         # (B, head_output_channels x n_heads output, H, W)
         outputs = torch.cat(outputs, dim=1)
         
         return outputs, z
     
-    # def load_from_pretrained_model(self, model_path:str):
-    #     model_state = torch.load(model_path)
-    #     encoder_state_dict = {k: v for k, v in model_state["state_dict"].items() if k.startswith("model.encoder.")}
-        
-    #     calibration_model_state_dict = calibration_model.state_dict()
-    #     calibration_model_state_dict.update(encoder_state_dict)
-    #     calibration_model.load_state_dict(calibration_model_state_dict)
+    def load_from_pretrained_model(self, model_path:str):
+        model_state = torch.load(model_path)
 
-    
+        state_dict = {}
+        for k in self.encoder.state_dict().keys():
+            if 'model.encoder.' + k in model_state["state_dict"]:
+                state_dict[k] = model_state["state_dict"]['model.encoder.' + k]
+
+        # calibration_model_state_dict = self.encoder.state_dict()
+        # calibration_model_state_dict.update(encoder_state_dict)
+        self.encoder.load_state_dict(state_dict)
+
+        decoder_state_dict = {}
+        for k in self.decoders.state_dict().keys():
+            if 'model.decoders.' + k in model_state["state_dict"]:
+                decoder_state_dict[k] = model_state["state_dict"]['model.decoders.' + k]
+
+        self.decoders.load_state_dict(decoder_state_dict)
+
+        print(f"Loaded model from {model_path}")
     
 if __name__ == "__main__":
     # Instantiate the model

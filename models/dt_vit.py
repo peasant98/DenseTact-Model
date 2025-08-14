@@ -10,6 +10,7 @@
 # --------------------------------------------------------
 
 from functools import partial
+from typing import Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -22,7 +23,7 @@ from util.pos_embed import get_2d_sincos_pos_embed
 class DTViT(nn.Module):
     """ Masked Autoencoder with VisionTransformer backbone
     """
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, out_chans=7,
+    def __init__(self, img_size=224, patch_size=16, in_chans=6, out_chans=7,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
                  mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
@@ -31,6 +32,12 @@ class DTViT(nn.Module):
         # --------------------------------------------------------------------------
         # MAE encoder specifics
         self.in_chans = in_chans
+        self.embed_dim = embed_dim
+        if len(out_chans) > 1:
+            # get product of out_chans list
+            out_chans = sum(out_chans)
+        else:
+            out_chans = out_chans[0]
         self.out_chans = out_chans
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
@@ -120,6 +127,71 @@ class DTViT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], self.out_chans, h * p, h * p))
         return imgs
 
+    def get_intermediate_layers(self, x, n=1, return_class_token=True):
+        """
+        Get output from intermediate transformer blocks.
+        
+        Args:
+            x: Input image tensor
+            n: Return outputs from the last n transformer blocks
+            If n is a list or tuple, return outputs from the specific block indices
+            return_class_token: If True, return tuple of (class_token, patch_tokens)
+                            If False, return the full token sequence
+            
+        Returns:
+            list of tensors or tensor pairs (depending on n and return_class_token)
+        """
+        # embed patches
+        x = self.patch_embed(x)
+        
+        # append cls token
+        cls_token = self.cls_token.repeat(x.shape[0], 1, 1)
+        x = torch.cat((cls_token, x), dim=1)
+        
+        # add pos embed w/o cls token
+        x = x + self.pos_embed
+        
+        # list to store intermediate outputs
+        features = []
+        
+        # determine which blocks to return outputs from
+        if isinstance(n, (list, tuple)):
+            # specific block indices requested
+            n_indices = sorted(n)
+            max_idx = max(n_indices)
+        else:
+            # last n blocks
+            max_idx = len(self.blocks) - 1
+            n_indices = list(range(len(self.blocks) - n, len(self.blocks)))
+        
+        # apply Transformer blocks and collect intermediate outputs
+        for i, blk in enumerate(self.blocks):
+            x = blk(x)
+            
+            # if this block's output is needed
+            if i in n_indices:
+                # apply normalization to the output
+                normalized_x = self.norm(x)
+                
+                if return_class_token:
+                    # Split into class token and patch tokens
+                    cls_tokens = normalized_x[:, 0:1]  # Class token is at index 0
+                    patch_tokens = normalized_x[:, 1:]  # All other tokens
+                    features.append((patch_tokens, cls_tokens))
+                else:
+                    # Return the full token sequence
+                    features.append(normalized_x)
+            
+            # early exit if we've collected all required outputs
+            if i >= max_idx:
+                break
+        
+        # return single result if only one layer is requested
+        if len(features) == 1:
+            return features[0]
+        
+        return features
+    
     def forward_encoder(self, x):
         # embed patches
         x = self.patch_embed(x)

@@ -1,5 +1,6 @@
 # 2024 ARMLab - DenseTact Calibration
 
+import time
 import json
 import os
 import pickle
@@ -29,6 +30,31 @@ import Imath
 import h5py
 
 from multiprocessing import Pool, Manager
+
+import random
+import torchvision.transforms.functional as F
+
+def sample_color_jitter_params(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.02):
+    b = random.uniform(max(0, 1 - brightness), 1 + brightness)
+    c = random.uniform(max(0, 1 - contrast), 1 + contrast)
+    s = random.uniform(max(0, 1 - saturation), 1 + saturation)
+    h = random.uniform(-hue, hue)
+    order = [0, 1, 2, 3]
+    random.shuffle(order)
+    return b, c, s, h, order
+
+def apply_color_jitter_tensor(img, params):
+    b, c, s, h, order = params
+    for o in order:
+        if o == 0:
+            img = F.adjust_brightness(img, b)
+        elif o == 1:
+            img = F.adjust_contrast(img, c)
+        elif o == 2:
+            img = F.adjust_saturation(img, s)
+        elif o == 3:
+            img = F.adjust_hue(img, h)
+    return img
 
 
 DEPTH_CONSTANT = 17.437069
@@ -69,63 +95,6 @@ FORCE_STDS =  [0.0008145869709551334, 0.0002247917652130127, 0.00009318174794316
 STRESS1_MEANS =  [-0.017115609720349312, -0.02853190153837204, -0.01735331304371357]
 STRESS1_STDS = [0.03661240264773369, 0.05918154492974281, 0.03791118785738945]
 
-def augment_images(deformed_img_norm, undeformed_img_norm, 
-                  contrast_range=(0.8, 1.2), 
-                  brightness_range=(-0.1, 0.1), 
-                  hue_range=(-0.05, 0.05),
-                  saturation_range=(0.8, 1.2),
-                  blur_sigma=None):
-    """
-    Apply random augmentations to both images while keeping the same transformations.
-    
-    Args:
-        deformed_img_norm: Normalized deformed image [0-1]
-        undeformed_img_norm: Normalized undeformed image [0-1]
-        contrast_range: Range for contrast adjustment
-        brightness_range: Range for brightness adjustment
-        hue_range: Range for hue shift
-        saturation_range: Range for saturation adjustment
-        blur_sigma: If not None, apply Gaussian blur with this sigma
-    
-    Returns:
-        Augmented deformed and undeformed images
-    """
-    # Generate random values for augmentation (same for both images)
-    contrast = np.random.uniform(*contrast_range)
-    brightness = np.random.uniform(*brightness_range)
-    hue_shift = np.random.uniform(*hue_range)
-    saturation = np.random.uniform(*saturation_range)
-    
-    # Make copies to avoid modifying originals
-    deformed_aug = deformed_img_norm.copy()
-    undeformed_aug = undeformed_img_norm.copy()
-    
-    # Apply contrast and brightness adjustments in RGB
-    deformed_aug = np.clip(deformed_aug * contrast + brightness, 0, 1)
-    undeformed_aug = np.clip(undeformed_aug * contrast + brightness, 0, 1)
-    
-    # Convert to HSV for hue and saturation adjustments
-    deformed_hsv = cv2.cvtColor((deformed_aug*255).astype(np.uint8), cv2.COLOR_RGB2HSV).astype(float)
-    undeformed_hsv = cv2.cvtColor((undeformed_aug*255).astype(np.uint8), cv2.COLOR_RGB2HSV).astype(float)
-    
-    # Apply hue shift (hue in OpenCV is 0-180)
-    deformed_hsv[:,:,0] = (deformed_hsv[:,:,0] + hue_shift * 180) % 180
-    undeformed_hsv[:,:,0] = (undeformed_hsv[:,:,0] + hue_shift * 180) % 180
-    
-    # Apply saturation adjustment
-    deformed_hsv[:,:,1] = np.clip(deformed_hsv[:,:,1] * saturation, 0, 255)
-    undeformed_hsv[:,:,1] = np.clip(undeformed_hsv[:,:,1] * saturation, 0, 255)
-    
-    # Convert back to RGB
-    deformed_aug = cv2.cvtColor(deformed_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB) / 255.0
-    undeformed_aug = cv2.cvtColor(undeformed_hsv.astype(np.uint8), cv2.COLOR_HSV2RGB) / 255.0
-    
-    # Apply Gaussian blur if specified
-    if blur_sigma is not None:
-        deformed_aug = gaussian_filter(deformed_aug, sigma=(blur_sigma, blur_sigma, 0))
-        undeformed_aug = gaussian_filter(undeformed_aug, sigma=(blur_sigma, blur_sigma, 0))
-    
-    return deformed_aug, undeformed_aug
 
 def normalize_item(item, channel_means, channel_stds):
     """
@@ -267,16 +236,24 @@ class FullDataset(Dataset):
         self.output_mask = self.get_output_mask()
         self.min = np.inf
         self.max = -np.inf
-        
+
+        self.folders = sorted(self.folder_with_idx)[::-1]
+
+        self.cache = []
+
+        # self.cached = False
+        # self.create_cache()
+        # self.cached = True
+
+
     def construct_dataset(self):
         self._construct_dataset_from_json()
             
     def create_cache(self):
         self.cache = []
-        for i in range(self.num_samples_to_cache):
+        for i in tqdm(range(15000), desc="Creating cache"):
             res = self[i]
             self.cache.append(res)
-            print("Cached", i)
             # add idx to cache
             
     def read_blender_info_json(self, json_file):
@@ -554,10 +531,13 @@ class FullDataset(Dataset):
         
     def __getitem__(self, idx):
         """Get item in dataset. Will get either depth or whole output suite"""
-        
+
+        # if self.cached and idx < len(self.cache):
+        #     # if cached, return from cache
+        #     return self.cache[idx]
 
         # based on sample idx, compute which folder to look in
-        for folder_item in sorted(self.folder_with_idx)[::-1]:
+        for folder_item in self.folders:
             folder_start_idx = folder_item[0]
             folder_name = folder_item[1]
 
@@ -572,34 +552,21 @@ class FullDataset(Dataset):
         # read deformed and undeformed images
         deformed_img_norm = cv2.imread(f'{samples_dir}/X{sample_num}/deformed.png')
         undeformed_img_norm = cv2.imread(f'{samples_dir}/X{sample_num}/undeformed.png')
-        
-        deformed_img_norm = cv2.cvtColor(deformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
-        undeformed_img_norm = cv2.cvtColor(undeformed_img_norm, cv2.COLOR_BGR2RGB) / 255.0
 
-        deformed_pil = Image.fromarray((deformed_img_norm * 255).astype(np.uint8))
-        undeformed_pil = Image.fromarray((undeformed_img_norm * 255).astype(np.uint8))
-        jittered_deformed_pil = self.color_jitter(deformed_pil)
-        jittered_undeformed_pil = self.color_jitter(undeformed_pil)
+        deformed = torch.from_numpy(cv2.cvtColor(deformed_img_norm, cv2.COLOR_BGR2RGB)).float() / 255.0
+        undeformed = torch.from_numpy(cv2.cvtColor(undeformed_img_norm, cv2.COLOR_BGR2RGB)).float() / 255.0
+        deformed = deformed.permute(2,0,1)
+        undeformed = undeformed.permute(2,0,1)
 
-        # Convert back to numpy arrays with values in [0,1] range
-        deformed_img_norm = np.array(jittered_deformed_pil).astype(np.float32) / 255.0
-        undeformed_img_norm = np.array(jittered_undeformed_pil).astype(np.float32) / 255.0
-
-        hsv_img1 = cv2.cvtColor((deformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
-        hsv_img2 = cv2.cvtColor((undeformed_img_norm*255).astype(np.uint8), cv2.COLOR_RGB2HSV)
-
-        image_diff = cv2.subtract(hsv_img1[:,:,2], hsv_img2[:,:,2]) / 255.0
-        # add extra dimension
-        image_diff = image_diff[:,:,np.newaxis]
-        
         data_pack = []
         
         # return data to avoid extra file reads.
         if self.is_mae:
-            X = (deformed_img_norm, undeformed_img_norm)
-            X = np.concatenate(X, axis=2)
-            X = self.transform(X).float()
-            y = [0]
+            deformed = self.transform(deformed).float()  # if transform accepts tensors
+            undeformed = self.transform(undeformed).float()  # if transform accepts tensors
+
+            X = torch.cat([deformed, undeformed], dim=0)  # shape (6,H,W)
+            y = torch.tensor([0], dtype=torch.long)
             return X, y
         
         # load bounds json only if it exists
