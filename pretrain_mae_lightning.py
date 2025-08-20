@@ -188,11 +188,14 @@ class LightningDTModel(L.LightningModule):
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.model.parameters(), lr=self.learning_rate, betas=(0.9, 0.95), weight_decay=0.05)
         scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_steps=10, T_max=self.num_epochs)
-        return {"optimizer": optimizer, 
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "interval": "epoch"
-                }}
+
+        return {"optimizer": optimizer}
+
+        # return {"optimizer": optimizer, 
+        #         "lr_scheduler": {
+        #             "scheduler": scheduler,
+        #             "interval": "epoch"
+        #         }}
 
 
 
@@ -211,8 +214,8 @@ if __name__ == '__main__':
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=64)
     arg.add_argument('--num_workers', type=int, default=24)
-    arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="mae_hiera")
+    arg.add_argument('--mask_ratio', type=float, default=0.35)
+    arg.add_argument('--exp_name', type=str, default="mae_hiera_no_lr_sched_0_35")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     

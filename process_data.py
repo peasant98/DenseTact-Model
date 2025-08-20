@@ -593,6 +593,7 @@ class FullDataset(Dataset):
                 x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['cnforce_local']['max_val_g'] - bounds['cnforce_local']['min_val_g'])) + bounds['cnforce_local']['min_val_g']
                 x3 = ((cnorm_img[:,:,2] / 255.0) * (bounds['cnforce_local']['max_val_b'] - bounds['cnforce_local']['min_val_b'])) + bounds['cnforce_local']['min_val_b']
                 cnorm = np.stack([x1, x2, x3], axis=2)
+
                 # apply self.mask to cnorm
                 # cnorm = cnorm * self.output_mask[:,:,np.newaxis]
                 if self.normalization:
