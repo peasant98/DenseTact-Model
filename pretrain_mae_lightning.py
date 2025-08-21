@@ -61,6 +61,14 @@ class LightningDTModel(L.LightningModule):
         self.contrast = 0.25
         self.saturation = 0.25
         self.hue = 0.02
+        
+        # Random crop transform
+        self.random_crop = transforms.RandomResizedCrop(
+            size=(256, 256), 
+            scale=(0.8, 1.0), 
+            ratio=(0.9, 1.1),
+            antialias=True
+        )
 
     def setup(self, stage=None):
         # populate only once
@@ -128,12 +136,18 @@ class LightningDTModel(L.LightningModule):
         undeformed = torch.clamp(undeformed, 0.0, 1.0)
         
         return torch.cat([deformed, undeformed], dim=1)
+    
+    def apply_random_crop(self, x):
+        """Apply random resized crop efficiently using torchvision"""
+        # x shape: (N, 6, H, W)
+        return self.random_crop(x)
         
     def training_step(self, batch, batch_idx):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
         X, _ = batch 
         
-        # Apply paired color jitter on GPU
+        # Apply random crop first, then color jitter for data augmentation
+        X = self.apply_random_crop(X)
         X = self.apply_paired_color_jitter(X)
         
         N, C, H, W = X.shape 
