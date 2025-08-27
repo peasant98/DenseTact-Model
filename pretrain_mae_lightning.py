@@ -65,7 +65,7 @@ class LightningDTModel(L.LightningModule):
         # Random crop transform
         self.random_crop = transforms.RandomResizedCrop(
             size=(256, 256), 
-            scale=(0.8, 1.0), 
+            scale=(0.3, 1.0), 
             ratio=(0.9, 1.1),
             antialias=True
         )
@@ -209,7 +209,7 @@ class LightningDTModel(L.LightningModule):
             self.log('train/ssim', ssim_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         
             # visualize the reconstructed images and augmented inputs
-            if batch_idx % 100 == 0:
+            if batch_idx % 20 == 0:
                 # Save augmented images for visualization
                 self.save_augmented_images(X_original, X, batch_idx)
                 # reshape pred to (N, C, H, W)
@@ -264,13 +264,13 @@ if __name__ == '__main__':
     arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/es4t/es4t/dataset_local/")
     arg.add_argument('--epochs', type=int, default=200)
     arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
-    arg.add_argument('--gpus', type=int, default=4)
+    arg.add_argument('--gpus', type=int, default=1)
     
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=64)
     arg.add_argument('--num_workers', type=int, default=24)
-    arg.add_argument('--mask_ratio', type=float, default=0.35)
-    arg.add_argument('--exp_name', type=str, default="mae_hiera_no_lr_sched_0_35")
+    arg.add_argument('--mask_ratio', type=float, default=0.7)
+    arg.add_argument('--exp_name', type=str, default="mae_random_crop_hiera")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     
@@ -311,7 +311,7 @@ if __name__ == '__main__':
     ax[0].set_title("Deformed Image")
     ax[1].imshow(undeform_color.transpose(1, 2, 0))
     ax[1].set_title("Undeformed Image")
-    plt.savefig("sample_image.png")
+    plt.savefig("sample_image_123.png")
     plt.close()
     
     dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers,)

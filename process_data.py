@@ -172,7 +172,7 @@ class CombinedMAEDataset(Dataset):
         
 class FullDataset(Dataset):
     OUTPUT_TYPES = ['depth', 'stress1', 'stress2', 'disp', 'shear', 'cnorm']
-    def __init__(self,  opt, transform=None, 
+    def __init__(self,  opt, transform=None, X_transform=None,
                  samples_dir='../Documents/Dataset/sim_dataset', 
                  root_dir=None,
                  extra_samples_dirs=['../Documents/Dataset/sim_dataset'],
@@ -190,7 +190,10 @@ class FullDataset(Dataset):
         """
         self.samples_dir = samples_dir
         self.root_dir = root_dir
-        self.transform = transform  
+        self.transform = transform 
+        self.X_transform = X_transform 
+
+
         self.output_type = opt.dataset.output_type
         self.normalization = opt.dataset.normalization
         self.extra_samples_dirs = extra_samples_dirs
@@ -681,9 +684,9 @@ class FullDataset(Dataset):
         else:
             y = [0]
 
-        X = (deformed_img_norm, undeformed_img_norm)
-        X = np.concatenate(X, axis=2)
-        X = self.transform(X).float()
+        deformed = self.X_transform(deformed).float()  # if transform accepts tensors
+        undeformed = self.X_transform(undeformed).float()  # if transform accepts tensors
+        X = torch.cat([deformed, undeformed], dim=0)  # shape (6,H,W)
 
         return X, y
     

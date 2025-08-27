@@ -950,7 +950,6 @@ if __name__ == '__main__':
     arg.add_argument('--real_world', action='store_true')
     opt = arg.parse_args()    
 
-
     # load config
     cfg = get_cfg_defaults()
     cfg.merge_from_file(opt.config)
@@ -967,12 +966,15 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
 
+    X_transform = transforms.Compose([
+        transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
+    ])
 
     extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
                           '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
                           '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
     
-    dataset = FullDataset(cfg, transform=transform, 
+    dataset = FullDataset(cfg, transform=transform, X_transform=X_transform,
                           extra_samples_dirs=extra_samples_dirs,
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
 
@@ -999,6 +1001,19 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=12)
 
     calibration_model = LightningDTModel(cfg)
+
+
+    X, y = dataset[1000]
+    deform_color = X[:3, :, :].detach().cpu().numpy()
+    undeform_color = X[3:6, :, :].detach().cpu().numpy()
+    fig, ax = plt.subplots(1, 2)
+    ax[0].imshow(deform_color.transpose(1, 2, 0))
+    ax[0].set_title("Deformed Image")
+    ax[1].imshow(undeform_color.transpose(1, 2, 0))
+    ax[1].set_title("Undeformed Image")
+    plt.savefig("sample_image_matt.png")
+    plt.close()
+    
 
     # get date
     date = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
