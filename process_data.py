@@ -172,7 +172,7 @@ class CombinedMAEDataset(Dataset):
         
 class FullDataset(Dataset):
     OUTPUT_TYPES = ['depth', 'stress1', 'stress2', 'disp', 'shear', 'cnorm']
-    def __init__(self,  opt, transform=None, 
+    def __init__(self,  opt, transform=None, X_transform=None,
                  samples_dir='../Documents/Dataset/sim_dataset', 
                  root_dir=None,
                  extra_samples_dirs=['../Documents/Dataset/sim_dataset'],
@@ -190,7 +190,10 @@ class FullDataset(Dataset):
         """
         self.samples_dir = samples_dir
         self.root_dir = root_dir
-        self.transform = transform  
+        self.transform = transform 
+        self.X_transform = X_transform 
+
+
         self.output_type = opt.dataset.output_type
         self.normalization = opt.dataset.normalization
         self.extra_samples_dirs = extra_samples_dirs
@@ -593,6 +596,7 @@ class FullDataset(Dataset):
                 x2 = ((cnorm_img[:,:,1] / 255.0) * (bounds['cnforce_local']['max_val_g'] - bounds['cnforce_local']['min_val_g'])) + bounds['cnforce_local']['min_val_g']
                 x3 = ((cnorm_img[:,:,2] / 255.0) * (bounds['cnforce_local']['max_val_b'] - bounds['cnforce_local']['min_val_b'])) + bounds['cnforce_local']['min_val_b']
                 cnorm = np.stack([x1, x2, x3], axis=2)
+
                 # apply self.mask to cnorm
                 # cnorm = cnorm * self.output_mask[:,:,np.newaxis]
                 if self.normalization:
@@ -680,9 +684,9 @@ class FullDataset(Dataset):
         else:
             y = [0]
 
-        X = (deformed_img_norm, undeformed_img_norm)
-        X = np.concatenate(X, axis=2)
-        X = self.transform(X).float()
+        deformed = self.X_transform(deformed).float()  # if transform accepts tensors
+        undeformed = self.X_transform(undeformed).float()  # if transform accepts tensors
+        X = torch.cat([deformed, undeformed], dim=0)  # shape (6,H,W)
 
         return X, y
     

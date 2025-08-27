@@ -21,6 +21,9 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, random_split
 import torchvision.models as models
 import torch.nn.functional as F
+
+from torchvision.transforms import functional as Fun
+
 from torchvision import transforms
 from process_data import FullDataset, FEAT_CHANNEL
 
@@ -128,6 +131,12 @@ class LightningDTModel(L.LightningModule):
         self.z_curr_mean = None
         self.z_curr_std = None
 
+        # Color jitter parameters
+        self.brightness = 0.25
+        self.contrast = 0.25
+        self.saturation = 0.25
+        self.hue = 0.02
+
     def set_teacher_encoders(self, teacher_encoders_dict):
         self.teacher_encoders_dict = teacher_encoders_dict
         
@@ -170,10 +179,72 @@ class LightningDTModel(L.LightningModule):
         # trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         # total_params = sum(p.numel() for p in self.model.parameters())
         # print(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({100 * trainable_params / total_params:.2f}%)")
+    
+    def apply_paired_color_jitter(self, x):
+        """Apply different color jitter params to each 3-channel half of 6-channel input"""
+        # x shape: (N, 6, H, W)
+        N, C, H, W = x.shape
         
+        # Split into deformed and undeformed
+        deformed = x[:, :3]  # (N, 3, H, W)
+        undeformed = x[:, 3:]  # (N, 3, H, W)
+        
+        # Sample different jitter parameters for each half
+        # Deformed image parameters
+        def_brightness = torch.empty(N, device=x.device).uniform_(1-self.brightness, 1+self.brightness)
+        def_contrast = torch.empty(N, device=x.device).uniform_(1-self.contrast, 1+self.contrast)
+        def_saturation = torch.empty(N, device=x.device).uniform_(1-self.saturation, 1+self.saturation)
+        def_hue = torch.empty(N, device=x.device).uniform_(-self.hue, self.hue)
+        
+        # Undeformed image parameters (different from deformed)
+        undef_brightness = torch.empty(N, device=x.device).uniform_(1-self.brightness, 1+self.brightness)
+        undef_contrast = torch.empty(N, device=x.device).uniform_(1-self.contrast, 1+self.contrast)
+        undef_saturation = torch.empty(N, device=x.device).uniform_(1-self.saturation, 1+self.saturation)
+        undef_hue = torch.empty(N, device=x.device).uniform_(-self.hue, self.hue)
+        
+        # Apply transforms with different parameters for each half
+        for i in range(N):
+            # Different random order for each image
+            ops = ['brightness', 'contrast', 'saturation', 'hue']
+            def_order = torch.randperm(4)
+            undef_order = torch.randperm(4)
+            
+            # Apply to deformed image
+            for idx in def_order:
+                op = ops[idx]
+                if op == 'brightness':
+                    deformed[i] = Fun.adjust_brightness(deformed[i], def_brightness[i].item())
+                elif op == 'contrast':
+                    deformed[i] = Fun.adjust_contrast(deformed[i], def_contrast[i].item())
+                elif op == 'saturation':
+                    deformed[i] = Fun.adjust_saturation(deformed[i], def_saturation[i].item())
+                elif op == 'hue':
+                    deformed[i] = Fun.adjust_hue(deformed[i], def_hue[i].item())
+
+            # Apply to undeformed image with different parameters
+            for idx in undef_order:
+                op = ops[idx]
+                if op == 'brightness':
+                    undeformed[i] = Fun.adjust_brightness(undeformed[i], undef_brightness[i].item())
+                elif op == 'contrast':
+                    undeformed[i] = Fun.adjust_contrast(undeformed[i], undef_contrast[i].item())
+                elif op == 'saturation':
+                    undeformed[i] = Fun.adjust_saturation(undeformed[i], undef_saturation[i].item())
+                elif op == 'hue':
+                    undeformed[i] = Fun.adjust_hue(undeformed[i], undef_hue[i].item())
+        
+        # Clamp to valid range and concatenate
+        deformed = torch.clamp(deformed, 0.0, 1.0)
+        undeformed = torch.clamp(undeformed, 0.0, 1.0)
+        
+        return torch.cat([deformed, undeformed], dim=1)
+       
             
     def training_step(self, batch, batch_idx):
         X, Y = batch 
+
+        # Apply paired color jitter on GPU
+        X = self.apply_paired_color_jitter(X)
         
         # # force Negative samples to be 0
         # Y = torch.where(torch.abs(Y) < self.cfg.metric.PN_thresh, torch.zeros_like(Y), Y)
@@ -541,6 +612,9 @@ class LightningDTModel(L.LightningModule):
     def _run_val_test_step(self, batch, batch_idx, name="val"):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
         X, Y = batch 
+
+        X = self.apply_paired_color_jitter(X)
+
         N, C, H, W = X.shape 
 
         # if model is densenet, get the z value
@@ -876,7 +950,6 @@ if __name__ == '__main__':
     arg.add_argument('--real_world', action='store_true')
     opt = arg.parse_args()    
 
-    
     # load config
     cfg = get_cfg_defaults()
     cfg.merge_from_file(opt.config)
@@ -893,19 +966,17 @@ if __name__ == '__main__':
         transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
     ])
 
-
-    # extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/sf2t/dataset_local/', 
-                        #   '/arm/u/maestro/Desktop/DenseTact-Model/sf3t/dataset_local/',
-                        #   '/arm/u/maestro/Desktop/DenseTact-Model/sf4t/dataset_local/']
+    X_transform = transforms.Compose([
+        transforms.Resize((cfg.model.img_size, cfg.model.img_size), antialias=True),
+    ])
 
     extra_samples_dirs = ['/arm/u/maestro/Desktop/DenseTact-Model/es1t/dataset_local/', 
                           '/arm/u/maestro/Desktop/DenseTact-Model/es2t/es2t/dataset_local/',
                           '/arm/u/maestro/Desktop/DenseTact-Model/es3t/es3t/dataset_local/']
     
-    dataset = FullDataset(cfg, transform=transform, 
+    dataset = FullDataset(cfg, transform=transform, X_transform=X_transform,
                           extra_samples_dirs=extra_samples_dirs,
                           samples_dir=opt.dataset_dir, is_real_world=opt.real_world)
-    
 
     print("Dataset total samples: {}".format(len(dataset)))
     full_dataset_length = len(dataset)
@@ -922,10 +993,27 @@ if __name__ == '__main__':
                                                   generator=torch.Generator().manual_seed(cfg.seed))
     print(f"Train dataset length: {len(train_dataset)}, Test dataset length: {len(test_dataset)}")
     
-    dataloader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers)
+    dataloader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers,
+                            pin_memory=True,
+                            pin_memory_device="cuda" if torch.cuda.is_available() else "",
+                            persistent_workers=True,
+                            prefetch_factor=8)
     test_dataloader = DataLoader(test_dataset, batch_size=16, shuffle=False, num_workers=12)
 
     calibration_model = LightningDTModel(cfg)
+
+
+    X, y = dataset[1000]
+    deform_color = X[:3, :, :].detach().cpu().numpy()
+    undeform_color = X[3:6, :, :].detach().cpu().numpy()
+    fig, ax = plt.subplots(1, 2)
+    ax[0].imshow(deform_color.transpose(1, 2, 0))
+    ax[0].set_title("Deformed Image")
+    ax[1].imshow(undeform_color.transpose(1, 2, 0))
+    ax[1].set_title("Undeformed Image")
+    plt.savefig("sample_image_matt.png")
+    plt.close()
+    
 
     # get date
     date = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -951,7 +1039,7 @@ if __name__ == '__main__':
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
     # add callbacks
-    strategy = "ddp_find_unused_parameters_true" if opt.gpus > 1 else "auto"
+    strategy = "ddp_find_unused_parameters_true" if opt.gpus < 1 else "auto"
     callbacks = [checkpoint_callback, lr_monitor]
     trainer = L.Trainer(max_epochs=cfg.epochs, callbacks=callbacks, logger=logger,
                         accelerator="gpu", devices=opt.gpus, strategy=strategy,

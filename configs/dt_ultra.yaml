@@ -1,13 +1,13 @@
-dataset_ratio: 0.5
-batch_size: 8
+dataset_ratio: 1.0
+batch_size: 24
 scale: 1.0
-epochs: 200
+epochs: 500
 
 teacher_encoders:
-  disp_path: '/arm/u/maestro/Desktop/DenseTact-Model/exp/hiera_disp_ultra_fixed_10/checkpoints/last.ckpt'
-  cnorm_path: '/arm/u/maestro/Desktop/DenseTact-Model/exp/hiera_cnorm_ultra_fixed/checkpoints/dt_model-epoch=194-val_psnr=55.31.ckpt'
+  disp_path: '/arm/u/maestro/Desktop/DenseTact-Model/exp/hiera_ultra_disp/checkpoints/last.ckpt'
+  # cnorm_path: '/arm/u/maestro/Desktop/DenseTact-Model/exp/hiera_cnorm_ultra_fixed/checkpoints/dt_model-epoch=194-val_psnr=55.31.ckpt'
   # stress_path: '/arm/u/maestro/Desktop/DenseTact-Model/exp/hiera_stress_ultra_fixed/checkpoints/dt_model-epoch=187-val_psnr=46.64.ckpt'
-  # stress2_path: '/arm/u/maestro/Desktop/DenseTact-Model/exp/hiera_stress2_ultra_fixed/checkpoints/dt_model-epoch=188-val_psnr=56.04.ckpt'
+  # # stress2_path: '/arm/u/maestro/Desktop/DenseTact-Model/exp/hiera_stress2_ultra_fixed/checkpoints/dt_model-epoch=188-val_psnr=56.04.ckpt'
   # area_shear_path: '/arm/u/maestro/Desktop/DenseTact-Model/exp/hiera_shear_ultra_fixed_1000/checkpoints/last.ckpt'
 
 scales:
@@ -27,11 +27,11 @@ unit_scales:
 model:
   name: HieraDPT
   out_chans: [3, 3, 3, 3, 3]
-  pretrained_model: "DT_Ultra_es_04/checkpoints/last.ckpt"
+  pretrained_model: "mae_random_crop_hiera/checkpoints/last.ckpt"
   LoRA: True
-
+  
   hiera:
-    return_encoder_output: True
+    return_encoder_output: False
     decoder: "QUpsampling"
     decoder_embed_dim: 512
     decoder_num_heads: 16
@@ -51,4 +51,4 @@ metric:
 
 scheduler:
   name: linear_cosine
-  warmup: 2000
+  warmup: 500

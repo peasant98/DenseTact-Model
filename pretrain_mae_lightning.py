@@ -61,6 +61,14 @@ class LightningDTModel(L.LightningModule):
         self.contrast = 0.25
         self.saturation = 0.25
         self.hue = 0.02
+        
+        # Random crop transform
+        self.random_crop = transforms.RandomResizedCrop(
+            size=(256, 256), 
+            scale=(0.3, 1.0), 
+            ratio=(0.9, 1.1),
+            antialias=True
+        )
 
     def setup(self, stage=None):
         # populate only once
@@ -128,12 +136,57 @@ class LightningDTModel(L.LightningModule):
         undeformed = torch.clamp(undeformed, 0.0, 1.0)
         
         return torch.cat([deformed, undeformed], dim=1)
+    
+    def save_augmented_images(self, X_original, X_augmented, batch_idx):
+        """Save original and augmented images side by side for visualization"""
+        import matplotlib.pyplot as plt
+        
+        # Create augmented_images directory if it doesn't exist
+        os.makedirs('augmented_images', exist_ok=True)
+        
+        # Get first sample from batch for visualization
+        orig_deform = X_original[0, :3, :, :].clamp(0, 1).detach().cpu().numpy().transpose(1, 2, 0)
+        orig_undeform = X_original[0, 3:6, :, :].clamp(0, 1).detach().cpu().numpy().transpose(1, 2, 0)
+        
+        aug_deform = X_augmented[0, :3, :, :].clamp(0, 1).detach().cpu().numpy().transpose(1, 2, 0)
+        aug_undeform = X_augmented[0, 3:6, :, :].clamp(0, 1).detach().cpu().numpy().transpose(1, 2, 0)
+        
+        # Create comparison plot
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        
+        axes[0, 0].imshow(orig_deform)
+        axes[0, 0].set_title('Original Deformed')
+        axes[0, 0].axis('off')
+        
+        axes[0, 1].imshow(orig_undeform)
+        axes[0, 1].set_title('Original Undeformed')
+        axes[0, 1].axis('off')
+        
+        axes[1, 0].imshow(aug_deform)
+        axes[1, 0].set_title('Augmented Deformed')
+        axes[1, 0].axis('off')
+        
+        axes[1, 1].imshow(aug_undeform)
+        axes[1, 1].set_title('Augmented Undeformed')
+        axes[1, 1].axis('off')
+        
+        plt.tight_layout()
+        plt.savefig(f'augmented_images/augmented_batch_{batch_idx}_epoch_{self.current_epoch}.png', 
+                   dpi=150, bbox_inches='tight')
+        plt.close()
+    
+    def apply_random_crop(self, x):
+        """Apply random resized crop efficiently using torchvision"""
+        # x shape: (N, 6, H, W)
+        return self.random_crop(x)
         
     def training_step(self, batch, batch_idx):
         # X - (N, C1, H, W); Y - (N, C2, H, W)
         X, _ = batch 
+        X_original = X.clone()  # Save original for comparison
         
-        # Apply paired color jitter on GPU
+        # Apply random crop first, then color jitter for data augmentation
+        X = self.apply_random_crop(X)
         X = self.apply_paired_color_jitter(X)
         
         N, C, H, W = X.shape 
@@ -155,8 +208,10 @@ class LightningDTModel(L.LightningModule):
             ssim_loss = ssim(pred, X)
             self.log('train/ssim', ssim_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
         
-            # visualize the reconstructed images
-            if batch_idx % 100 == 0:
+            # visualize the reconstructed images and augmented inputs
+            if batch_idx % 20 == 0:
+                # Save augmented images for visualization
+                self.save_augmented_images(X_original, X, batch_idx)
                 # reshape pred to (N, C, H, W)
                 deform_color = pred[0, :3, :, :].clamp_(min=0., max=1.).detach().cpu().numpy()
                 undeform_color = pred[0, 3:6, :, :].clamp_(min=0, max=1.).detach().cpu().numpy()
@@ -188,11 +243,14 @@ class LightningDTModel(L.LightningModule):
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.model.parameters(), lr=self.learning_rate, betas=(0.9, 0.95), weight_decay=0.05)
         scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_steps=10, T_max=self.num_epochs)
-        return {"optimizer": optimizer, 
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "interval": "epoch"
-                }}
+
+        return {"optimizer": optimizer}
+
+        # return {"optimizer": optimizer, 
+        #         "lr_scheduler": {
+        #             "scheduler": scheduler,
+        #             "interval": "epoch"
+        #         }}
 
 
 
@@ -206,13 +264,13 @@ if __name__ == '__main__':
     arg.add_argument('--dataset_dir', type=str, default="/arm/u/maestro/Desktop/DenseTact-Model/es4t/es4t/dataset_local/")
     arg.add_argument('--epochs', type=int, default=200)
     arg.add_argument('--config', type=str, default="configs/QHiera_disp.yaml")
-    arg.add_argument('--gpus', type=int, default=4)
+    arg.add_argument('--gpus', type=int, default=1)
     
     arg.add_argument('--model', type=str, default="mae_hiera_large_256", help="Model Architecture, choose either hiera or vit")
     arg.add_argument('--batch_size', type=int, default=64)
     arg.add_argument('--num_workers', type=int, default=24)
-    arg.add_argument('--mask_ratio', type=float, default=0.75)
-    arg.add_argument('--exp_name', type=str, default="mae_hiera")
+    arg.add_argument('--mask_ratio', type=float, default=0.7)
+    arg.add_argument('--exp_name', type=str, default="mae_random_crop_hiera")
     arg.add_argument('--ckpt_path', type=str, default=None)
     arg.add_argument('--real_world', action='store_true')
     
@@ -253,7 +311,7 @@ if __name__ == '__main__':
     ax[0].set_title("Deformed Image")
     ax[1].imshow(undeform_color.transpose(1, 2, 0))
     ax[1].set_title("Undeformed Image")
-    plt.savefig("sample_image.png")
+    plt.savefig("sample_image_123.png")
     plt.close()
     
     dataloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers,)

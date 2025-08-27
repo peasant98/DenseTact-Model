@@ -564,7 +564,7 @@ class HieraQUpsampingDecoder(nn.Module):
         for spatial_decoder in self.spatial_decoders:
             pred.append(spatial_decoder(x))
         pred = torch.cat(pred, dim=1)
-        return pred, x
+        return pred
     
 
 class DPTV2Net(nn.Module):
@@ -746,6 +746,7 @@ class HieraDPT(nn.Module):
     def forward(self, x):
         z, intermediates = self.encoder(x, None, return_intermediates=True)
         intermediates = intermediates[: self.encoder.q_pool] + intermediates[-1:]
+
         # predictions
         preds = []
         if self.decoder_head is None:
@@ -754,7 +755,6 @@ class HieraDPT(nn.Module):
         for decoder in self.decoder_head:
             # pred, trunk_z = decoder(intermediates)
             pred = decoder(intermediates)
-
             preds.append(pred)
 
         preds = torch.cat(preds, dim=1)

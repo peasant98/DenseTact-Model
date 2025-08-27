@@ -169,7 +169,98 @@ class DTNet(nn.Module):
         
         return outputs
     
-    
+    def load_from_pretrained_model(self, model_path: str):
+        """
+        Load weights from a pre-trained model for both encoder and decoders
+        
+        Args:
+            model_path (str): Path to the pre-trained model weights file
+        
+        Returns:
+            bool: True if weights loaded successfully, False otherwise
+        """
+        import pdb; pdb.set_trace()
+        try:
+            # Load the state dictionary from the specified path
+            print(f"Loading pre-trained weights from: {model_path}")
+            checkpoint = torch.load(model_path, map_location=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+            
+            # Check if it's a complete model or just the state dict
+            state_dict = checkpoint.get('state_dict', checkpoint)
+            
+            # Handle different key prefixes (common when saving with DataParallel)
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                # Remove 'module.' prefix if present
+                name = k[7:] if k.startswith('module.') else k
+                new_state_dict[name] = v
+            
+            # Separate encoder and decoder weights
+            encoder_dict = {k: v for k, v in new_state_dict.items() if k.startswith('encoder.')}
+            decoder_dict = {k: v for k, v in new_state_dict.items() if k.startswith('decoders.')}
+            
+            # Load encoder parameters
+            if encoder_dict:
+                encoder_dict = {k.replace('encoder.', ''): v for k, v in encoder_dict.items()}
+                missing_keys, unexpected_keys = self.encoder.load_state_dict(encoder_dict, strict=False)
+                
+                if len(missing_keys) > 0:
+                    print(f"\033[93m[WARN] Missing encoder keys: {missing_keys[:5]}{'...' if len(missing_keys) > 5 else ''}\033[0m")
+                if len(unexpected_keys) > 0:
+                    print(f"\033[93m[WARN] Unexpected encoder keys: {unexpected_keys[:5]}{'...' if len(unexpected_keys) > 5 else ''}\033[0m")
+                
+                print(f"\033[92m[INFO] Encoder weights loaded successfully for {self.encoder.__class__.__name__}\033[0m")
+            else:
+                print(f"\033[93m[WARN] No encoder weights found in the pre-trained model\033[0m")
+            
+            # Load decoder parameters
+            if decoder_dict:
+                # Check if we have the same number of decoders
+                num_heads_in_model = len(self.decoders)
+                
+                # Group decoder weights by decoder index
+                decoder_groups = {}
+                for k, v in decoder_dict.items():
+                    parts = k.split('.')
+                    if len(parts) >= 3 and parts[0] == 'decoders':
+                        decoder_idx = int(parts[1])
+                        if decoder_idx not in decoder_groups:
+                            decoder_groups[decoder_idx] = {}
+                        # Remove the 'decoders.N.' prefix
+                        new_key = '.'.join(parts[2:])
+                        decoder_groups[decoder_idx][new_key] = v
+                
+                # Load weights for each decoder
+                for idx, decoder_weights in decoder_groups.items():
+                    if idx < num_heads_in_model:
+                        missing_keys, unexpected_keys = self.decoders[idx].load_state_dict(decoder_weights, strict=False)
+                        
+                        if len(missing_keys) > 0:
+                            print(f"\033[93m[WARN] Missing keys for decoder {idx}: {missing_keys[:5]}{'...' if len(missing_keys) > 5 else ''}\033[0m")
+                        if len(unexpected_keys) > 0:
+                            print(f"\033[93m[WARN] Unexpected keys for decoder {idx}: {unexpected_keys[:5]}{'...' if len(unexpected_keys) > 5 else ''}\033[0m")
+                        
+                        print(f"\033[92m[INFO] Decoder {idx} weights loaded successfully\033[0m")
+                    else:
+                        print(f"\033[93m[WARN] Pre-trained model has more decoders than current model. Skipping decoder {idx}\033[0m")
+                
+                # Check if current model has more decoders than pre-trained model
+                if num_heads_in_model > len(decoder_groups):
+                    print(f"\033[93m[WARN] Current model has more decoders ({num_heads_in_model}) than pre-trained model ({len(decoder_groups)}). Some decoders will use default initialization.\033[0m")
+            else:
+                print(f"\033[93m[WARN] No decoder weights found in the pre-trained model\033[0m")
+            
+            # Check if there are any additional training states to load (optimizers, lr_schedulers, etc.)
+            if 'epoch' in checkpoint:
+                print(f"\033[92m[INFO] Checkpoint was saved at epoch {checkpoint['epoch']}\033[0m")
+            
+            return True
+            
+        except Exception as e:
+            print(f"\033[91m[ERROR] Failed to load pre-trained model: {str(e)}\033[0m")
+            import traceback
+            traceback.print_exc()
+            return False
 if __name__ == "__main__":
     # Instantiate the model
     # sample usage with 1 heads and 1 output channels per head.
