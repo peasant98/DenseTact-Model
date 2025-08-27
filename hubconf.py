@@ -3,6 +3,7 @@
 dependencies = ["torch", "yacs", "torchvision", "timm"]
 __all__ = ["hiera"]
 
+import os
 import torch
 from torch.hub import load_state_dict_from_url
 from configs import get_cfg_defaults
@@ -11,7 +12,10 @@ from models import build_model  # , replace_LoRA  # if you need the function
 _WEIGHTS = {
     "base": "https://github.com/peasant98/DenseTact-Model/releases/download/models/last.ckpt"
 }
-LOCAL_CONFIG_PATH = "configs/dt_ultra.yaml"
+
+# Get absolute path to config relative to hubconf.py location
+HUBCONF_DIR = os.path.dirname(os.path.abspath(__file__))
+LOCAL_CONFIG_PATH = os.path.join(HUBCONF_DIR, "configs", "dt_ultra.yaml")
 
 def hiera(pretrained: bool = True, variant: str = "base", map_location="cpu", **kwargs):
     """
