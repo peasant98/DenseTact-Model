@@ -1,6 +1,6 @@
 # hubconf.py
 # PyTorch Hub config
-dependencies = ["torch", "yacs", "pyyaml", "torchvision", "timm"]
+dependencies = ["torch", "yacs", "torchvision", "timm"]
 __all__ = ["hiera"]
 
 import torch
