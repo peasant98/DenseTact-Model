@@ -67,6 +67,9 @@ def get_output_names(cfg):
 if __name__ == '__main__':
     tactile_model = hubconf.hiera()
 
+    # tactile_model = torch.hub.load('peasant98/DenseTact-Model', 'hiera', pretrained=True, map_location='cpu', trust_repo=True)
+    tactile_model.eval()
+
     # get calibration output from the tactile image.    
     # send model to cuda
     tactile_model = tactile_model.cuda()
@@ -118,6 +121,14 @@ if __name__ == '__main__':
     # Add batch dimension and send to cuda
     X = X_reloaded.unsqueeze(0).cuda()  # Shape: (1, 6, 256, 256)
     print(f"Input shape: {X.shape}")
+
+    # using just encoder:
+    z, _ = tactile_model.encoder(X, None, return_intermediates=True)
+
+    # z shape is num of vision tokens x 768.
+    # for a 256 by 256 image, we have 16x16 vision tokens. So 256 vision tokens!
+
+    print(z.shape)
 
     with torch.no_grad():
         output = tactile_model(X)
