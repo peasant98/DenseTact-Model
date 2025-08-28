@@ -66,8 +66,8 @@ def get_output_names(cfg):
 
 if __name__ == '__main__':
     tactile_model = hubconf.hiera()
-    # get calibration output from the tactile image.    
 
+    # get calibration output from the tactile image.    
     # send model to cuda
     tactile_model = tactile_model.cuda()
 
@@ -92,28 +92,23 @@ if __name__ == '__main__':
 
     real_world = False
 
-    dataset = FullDataset(cfg, samples_dir=dataset_dir, transform=transform, X_transform=X_transform, 
-                          extra_samples_dirs=extra_samples_dirs, is_real_world=real_world)
-
-    X, y = dataset[100]
-    orig_deform = X[:3, :, :].clamp(0, 1).detach().cpu().numpy().transpose(1, 2, 0)
-    orig_undeform = X[ 3:6, :, :].clamp(0, 1).detach().cpu().numpy().transpose(1, 2, 0)
+    from PIL import Image
+    deformed_pil = Image.open('deformed_tactile.png').convert('RGB')  # Ensure RGB only
+    undeformed_pil = Image.open('undeformed_tactile.png').convert('RGB')  # Ensure RGB only
+    
+    # Convert PIL images to torch tensors (C, H, W) format with values in [0, 1]
+    to_tensor = transforms.ToTensor()
+    deformed_tensor = to_tensor(deformed_pil)  # Shape: (3, 256, 256)
+    undeformed_tensor = to_tensor(undeformed_pil)  # Shape: (3, 256, 256)
+    
+    # Concatenate to recreate 6-channel input tensor
+    X_reloaded = torch.cat([deformed_tensor, undeformed_tensor], dim=0)  # Shape: (6, 256, 256)
+    print(f"Reloaded tensor shape: {X_reloaded.shape}")
+    print(f"Tensor values range: [{X_reloaded.min():.3f}, {X_reloaded.max():.3f}]")
     
     # Create comparison plot
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     
-    axes[0, 0].imshow(orig_deform)
-    axes[0, 0].set_title('Original Deformed')
-    axes[0, 0].axis('off')
-    
-    axes[0, 1].imshow(orig_undeform)
-    axes[0, 1].set_title('Original Undeformed')
-    axes[0, 1].axis('off')
-
-    # save figure
-    plt.savefig("sample_image_inference.png")
-    plt.close()
-
     # Get output names for denormalization
     output_names = get_output_names(cfg)
     print(f"Output names: {output_names}")
@@ -121,7 +116,7 @@ if __name__ == '__main__':
     tactile_model.eval()
 
     # Add batch dimension and send to cuda
-    X = X.unsqueeze(0).cuda()  # Shape: (1, 6, 256, 256)
+    X = X_reloaded.unsqueeze(0).cuda()  # Shape: (1, 6, 256, 256)
     print(f"Input shape: {X.shape}")
 
     with torch.no_grad():
