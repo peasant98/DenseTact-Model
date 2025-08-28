@@ -65,9 +65,9 @@ def get_output_names(cfg):
     return output_names
 
 if __name__ == '__main__':
-    tactile_model = hubconf.hiera()
+    # tactile_model = hubconf.hiera()
 
-    # tactile_model = torch.hub.load('peasant98/DenseTact-Model', 'hiera', pretrained=True, map_location='cpu', trust_repo=True)
+    tactile_model = torch.hub.load('peasant98/DenseTact-Model', 'hiera', pretrained=True, map_location='cpu', trust_repo=True)
     tactile_model.eval()
 
     # get calibration output from the tactile image.    
