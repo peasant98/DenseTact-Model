@@ -2,7 +2,28 @@
 
 One DenseTact Model to rule them all.
 
-We present the most complete tactile sensor; predicting displacement, shear, stress, force.
+Use Torch Hub to load our models! It's easy!
+
+
+```sh
+pip install torch torchvision yacs timm
+```
+```python
+>>> import torch
+>>> model = torch.hub.load('peasant98/DenseTact-Model', 'hiera', pretrained=True, map_location='cpu', trust_repo=True)
+>>> model = model.cuda()
+```
+
+We have a demo to run on sample images:
+
+We also provide steps for running the encoder, which can be found in the file!
+
+```sh
+python3 test_hub.py
+```
+
+
+We present the most complete optical tactile sensor; predicting displacement, shear, stress, force.
 
 # Train the model 
 
