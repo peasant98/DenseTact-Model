@@ -10,7 +10,7 @@ from configs import get_cfg_defaults
 from models import build_model  # , replace_LoRA  # if you need the function
 
 _WEIGHTS = {
-    "base": "https://github.com/peasant98/DenseTact-Model/releases/download/models/last.ckpt"
+    "base": "https://github.com/peasant98/DenseTact-Model/releases/download/models/best.ckpt"
 }
 
 # Get absolute path to config relative to hubconf.py location
