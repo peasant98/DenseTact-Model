@@ -1,14 +1,10 @@
 import numpy as np
 
 import torch
-import hubconf
 from torchvision import transforms
 import matplotlib.pyplot as plt
 
-
 from configs import get_cfg_defaults
-
-from process_data import FullDataset, FEAT_CHANNEL
 
 LOCAL_CONFIG_PATH = 'configs/dt_ultra.yaml' 
 
@@ -65,8 +61,6 @@ def get_output_names(cfg):
     return output_names
 
 if __name__ == '__main__':
-    # tactile_model = hubconf.hiera()
-
     tactile_model = torch.hub.load('peasant98/DenseTact-Model', 'hiera', pretrained=True, map_location='cpu', trust_repo=True)
     tactile_model.eval()
 
