@@ -24,11 +24,6 @@ import pandas as pd
 
 from tqdm import tqdm
 
-import OpenEXR
-import Imath
-
-import h5py
-
 from multiprocessing import Pool, Manager
 
 import random
